@@ -1,4 +1,4 @@
-import React, { createContext, useContext, useState, useEffect, useMemo, ReactNode } from 'react';
+import React, { createContext, useContext, useState, useEffect, useMemo, useRef, useCallback, ReactNode } from 'react';
 import {
   RawMaterial,
   MenuItem,
@@ -27,6 +27,18 @@ import {
 } from '../data/initialData';
 import { generateId } from '../utils/formatters';
 import { googleSheetsService } from '../services/googleSheetsService';
+import { pullState, pushState, loadSyncMeta, saveSyncMeta } from '../services/cloudSyncService';
+import { type SyncState, stateHash } from '../services/syncMerge';
+import { runSyncCycle } from '../services/syncEngine';
+
+export type CloudSyncStatus = 'off' | 'idle' | 'syncing' | 'synced' | 'error';
+
+export interface CloudSyncInfo {
+  status: CloudSyncStatus;
+  message: string | null;
+  lastSyncedAt: string | null;
+  syncNow: () => void;
+}
 
 interface FinancialMetrics {
   grossSales: number;
@@ -131,6 +143,9 @@ interface AppContextType {
   resetToInitialData: () => void;
   clearAllData: () => void;
 
+  // Sinkronisasi antar perangkat (Google Sheets)
+  cloudSync: CloudSyncInfo;
+
   // Computed & Helpers
   lowStockItems: RawMaterial[];
   calculateRecipeCOGS: (recipe: RecipeItem[]) => number;
@@ -187,7 +202,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return saved ? JSON.parse(saved) : [];
   });
 
+  // Penanda item yang sudah dihapus (agar tidak "hidup lagi" saat digabung dengan perangkat lain)
+  const [tombstones, setTombstones] = useState<string[]>(() => {
+    try {
+      const saved = localStorage.getItem(`${STORAGE_KEY}_tombstones`);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+  const addTombstone = (id: string) => setTombstones((prev) => (prev.includes(id) ? prev : [...prev, id].slice(-5000)));
+
   // Persist to localStorage
+  useEffect(() => {
+    localStorage.setItem(`${STORAGE_KEY}_tombstones`, JSON.stringify(tombstones));
+  }, [tombstones]);
+
   useEffect(() => {
     localStorage.setItem(`${STORAGE_KEY}_materials`, JSON.stringify(rawMaterials));
   }, [rawMaterials]);
@@ -315,6 +345,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const deleteCustomer = (id: string) => {
+    addTombstone(id);
     setCustomers((prev) => prev.filter((c) => c.id !== id));
   };
 
@@ -726,6 +757,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const deleteRawMaterial = (id: string) => {
     setRawMaterials((prev) => prev.filter((m) => m.id !== id));
+    // Buang bahan ini dari semua resep agar tidak ada referensi yatim
+    setMenuItems((prev) =>
+      prev.some((m) => m.recipe.some((r) => r.rawMaterialId === id))
+        ? prev.map((m) => ({ ...m, recipe: m.recipe.filter((r) => r.rawMaterialId !== id) }))
+        : prev
+    );
+    addTombstone(id);
   };
 
   // Menu Management
@@ -739,6 +777,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const deleteMenuItem = (id: string) => {
+    addTombstone(id);
     setMenuItems((prev) => prev.filter((m) => m.id !== id));
   };
 
@@ -763,6 +802,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const deleteExpense = (id: string) => {
+    addTombstone(id);
     setExpenses((prev) => prev.filter((e) => e.id !== id));
   };
 
@@ -821,12 +861,24 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setCurrentShift(initialShift);
     setStoreSettings(initialStoreSettings);
     setCustomers(initialCustomers);
+    setTombstones([]);
   };
 
   // Kosongkan seluruh data operasional (bahan baku, menu, transaksi, beban, pelanggan, shift, antrean sync).
   // Profil toko (nama, alamat, pajak, dsb.) sengaja dipertahankan.
   const clearAllData = () => {
     googleSheetsService.clearQueue();
+
+    // Tandai semua data lama sebagai terhapus supaya perangkat lain ikut kosong saat sinkron
+    const allIds = [
+      ...rawMaterials,
+      ...menuItems,
+      ...customers,
+      ...transactions,
+      ...expenses,
+      ...stockMovements,
+    ].map((x) => x.id);
+    setTombstones((prev) => Array.from(new Set([...prev, ...allIds])));
 
     setRawMaterials([]);
     setMenuItems([]);
@@ -841,6 +893,132 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     });
     setCustomers([]);
   };
+
+  // ---------------------------------------------------------------------------
+  // SINKRONISASI ANTAR PERANGKAT (Google Sheets sebagai database bersama)
+  // Alur: tarik data server -> jika server berubah & lokal berubah, gabung per-ID
+  // (lokal menang untuk ID yang sama) -> kirim hasilnya. Otomatis: setelah ada
+  // perubahan (2,5 dtk), saat aplikasi dibuka/dibuka kembali, dan tiap 60 dtk.
+  // ---------------------------------------------------------------------------
+  const [syncInfo, setSyncInfo] = useState<{
+    status: CloudSyncStatus;
+    message: string | null;
+    lastSyncedAt: string | null;
+  }>(() => ({
+    status: googleSheetsService.getConfig().webAppUrl ? 'idle' : 'off',
+    message: null,
+    lastSyncedAt: loadSyncMeta().lastSyncedAt,
+  }));
+
+  const currentState: SyncState = {
+    rawMaterials,
+    menuItems,
+    customers,
+    transactions,
+    expenses,
+    stockMovements,
+    storeSettings,
+    currentShift,
+    tombstones,
+  };
+  const stateRef = useRef<SyncState>(currentState);
+  stateRef.current = currentState;
+
+  const metaRef = useRef(loadSyncMeta());
+  const busyRef = useRef(false);
+  const rerunRef = useRef(false);
+
+  const applyRemote = (st: SyncState) => {
+    setRawMaterials(st.rawMaterials as RawMaterial[]);
+    setMenuItems(st.menuItems as MenuItem[]);
+    setCustomers(st.customers as Customer[]);
+    setTransactions(st.transactions as Transaction[]);
+    setExpenses(st.expenses as Expense[]);
+    setStockMovements(st.stockMovements as StockMovement[]);
+    if (st.storeSettings) setStoreSettings(st.storeSettings as StoreSettings);
+    if (st.currentShift) setCurrentShift(st.currentShift as Shift);
+    setTombstones(st.tombstones);
+  };
+
+  const applyRemoteRef = useRef(applyRemote);
+  applyRemoteRef.current = applyRemote;
+
+  const commitSync = (version: number, st: SyncState) => {
+    const meta = { version, hash: stateHash(st), lastSyncedAt: new Date().toISOString() };
+    metaRef.current = meta;
+    saveSyncMeta(meta);
+    setSyncInfo({ status: 'synced', message: null, lastSyncedAt: meta.lastSyncedAt });
+  };
+
+  const commitSyncRef = useRef(commitSync);
+  commitSyncRef.current = commitSync;
+
+  const syncNow = useCallback(async (): Promise<void> => {
+    if (!googleSheetsService.getConfig().webAppUrl) {
+      setSyncInfo((p) => ({ ...p, status: 'off', message: null }));
+      return;
+    }
+    if (busyRef.current) {
+      rerunRef.current = true;
+      return;
+    }
+    busyRef.current = true;
+    setSyncInfo((p) => ({ ...p, status: 'syncing', message: null }));
+
+    try {
+      await runSyncCycle({
+        getMeta: () => metaRef.current,
+        getLocal: () => stateRef.current,
+        pull: pullState,
+        push: pushState,
+        apply: applyRemoteRef.current,
+        commit: commitSyncRef.current,
+      });
+    } catch (err) {
+      const msg = err instanceof Error ? err.message : String(err);
+      setSyncInfo((p) => ({ ...p, status: 'error', message: msg }));
+    } finally {
+      busyRef.current = false;
+      if (rerunRef.current) {
+        rerunRef.current = false;
+        setTimeout(() => void syncNow(), 800);
+      }
+    }
+  }, []);
+
+  // 1) Kirim otomatis 2,5 detik setelah ada perubahan data
+  useEffect(() => {
+    const t = setTimeout(() => {
+      const meta = metaRef.current;
+      if (meta.version !== 0 && stateHash(stateRef.current) === meta.hash) return; // tidak ada perubahan
+      void syncNow();
+    }, 2500);
+    return () => clearTimeout(t);
+  }, [rawMaterials, menuItems, customers, transactions, expenses, stockMovements, storeSettings, currentShift, tombstones, syncNow]);
+
+  // 2) Saat dibuka, saat kembali ke tab/aplikasi, saat online lagi, dan tiap 60 detik
+  useEffect(() => {
+    const first = setTimeout(() => void syncNow(), 1200);
+    const onVisible = () => {
+      if (document.visibilityState === 'visible') void syncNow();
+    };
+    const onOnline = () => void syncNow();
+    const interval = setInterval(() => {
+      if (document.visibilityState === 'visible') void syncNow();
+    }, 60000);
+    document.addEventListener('visibilitychange', onVisible);
+    window.addEventListener('online', onOnline);
+    window.addEventListener('focus', onVisible);
+    return () => {
+      clearTimeout(first);
+      clearInterval(interval);
+      document.removeEventListener('visibilitychange', onVisible);
+      window.removeEventListener('online', onOnline);
+      window.removeEventListener('focus', onVisible);
+    };
+  }, [syncNow]);
+
+  const cloudSync: CloudSyncInfo = { ...syncInfo, syncNow: () => void syncNow() };
 
   // Financial Metrics Aggregator
   const getFinancialMetrics = (startDate?: string, endDate?: string): FinancialMetrics => {
@@ -965,6 +1143,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         updateSettings,
         resetToInitialData,
         clearAllData,
+        cloudSync,
         lowStockItems,
         calculateRecipeCOGS,
         getFinancialMetrics,

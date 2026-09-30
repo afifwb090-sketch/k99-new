@@ -18,263 +18,18 @@ import {
 } from 'lucide-react';
 import { googleSheetsService, GoogleSheetsConfig } from '../services/googleSheetsService';
 import { useApp } from '../context/AppContext';
+import { APPS_SCRIPT_CODE } from '../data/appsScript';
 
 interface GoogleSheetsModalProps {
   isOpen: boolean;
   onClose: () => void;
 }
 
-const APPS_SCRIPT_CODE = `/**
- * =========================================================================
- * K99 COFFEE POS & ERP - GOOGLE APPS SCRIPT BACKEND API
- * =========================================================================
- * Script ini berfungsi sebagai REST API / Webhook Backend untuk K99 Coffee POS
- * yang di-deploy di Cloudflare Pages.
- * 
- * PANDUAN CEPAT (3 Menit):
- * 1. Buat Google Sheet baru di Google Drive Anda.
- * 2. Klik menu "Ekstensi" (Extensions) -> "Apps Script".
- * 3. Hapus semua kode yang ada di editor, lalu paste kode ini.
- * 4. Klik "Simpan" (Ctrl+S).
- * 5. Klik tombol "Terapkan" (Deploy) -> "Penerapan Baru" (New Deployment).
- * 6. Pilih jenis: "Aplikasi Web" (Web App).
- *    - Jalankan sebagai (Execute as): "Saya" (Me)
- *    - Akses (Who has access): "Siapa saja" (Anyone) -> PENTING!
- * 7. Klik "Terapkan". Salin URL Aplikasi Web (/exec) dan tempel ke POS.
- * =========================================================================
- */
-
-const SHEET_TRANSAKSI = 'Transaksi';
-const SHEET_BAHAN_BAKU = 'Bahan_Baku';
-const SHEET_BEBAN = 'Beban_Operasional';
-const SHEET_LOG_BAHAN = 'Log_Bahan_Keluar';
-const SHEET_SHIFT = 'Rekap_Shift';
-const SHEET_PELANGGAN = 'Pelanggan';
-const SHEET_MENU = 'Menu_Produk';
-
-function doGet(e) {
-  const action = (e && e.parameter && e.parameter.action) ? e.parameter.action : 'ping';
-  const ss = SpreadsheetApp.getActiveSpreadsheet();
-
-  if (action === 'ping') {
-    return createJsonResponse({
-      status: 'success',
-      message: 'K99 Coffee Apps Script Backend Siap & Terhubung!',
-      spreadsheetName: ss.getName(),
-      timestamp: new Date().toISOString()
-    });
-  }
-
-  if (action === 'get_all_data') {
-    initAllSheets(ss);
-    return createJsonResponse({
-      status: 'success',
-      data: {
-        transactions: getSheetDataAsJson(ss.getSheetByName(SHEET_TRANSAKSI)),
-        rawMaterials: getSheetDataAsJson(ss.getSheetByName(SHEET_BAHAN_BAKU)),
-        expenses: getSheetDataAsJson(ss.getSheetByName(SHEET_BEBAN))
-      }
-    });
-  }
-
-  return createJsonResponse({ status: 'error', message: 'Action tidak dikenal' });
-}
-
-function doPost(e) {
-  const lock = LockService.getScriptLock();
-  lock.tryLock(15000);
-
-  try {
-    const ss = SpreadsheetApp.getActiveSpreadsheet();
-    initAllSheets(ss);
-
-    let payload = {};
-    if (e && e.postData && e.postData.contents) {
-      payload = JSON.parse(e.postData.contents);
-    }
-
-    const action = payload.action || 'create_transaction';
-
-    // 1. Simpan Transaksi Kasir
-    if (action === 'create_transaction' && payload.data) {
-      const tx = payload.data;
-      const sheetTx = ss.getSheetByName(SHEET_TRANSAKSI);
-
-      const itemsSummary = (tx.items || []).map(function(i) {
-        return i.quantity + 'x ' + i.name + (i.temperature ? ' [' + i.temperature + ']' : '');
-      }).join('; ');
-
-      sheetTx.appendRow([
-        tx.timestamp || new Date().toISOString(),
-        tx.id,
-        tx.channel || 'OFFLINE',
-        tx.onlinePlatform || '-',
-        tx.orderType || 'Dine In',
-        tx.customerName || 'Walk-in Customer',
-        tx.customerPhone || '-',
-        tx.paymentMethod || 'QRIS',
-        tx.subtotal || 0,
-        tx.discountAmount || 0,
-        tx.taxAmount || 0,
-        tx.totalAmount || 0,
-        tx.totalCOGS || 0,
-        tx.grossProfit || 0,
-        tx.cashierName || 'Kasir K99',
-        itemsSummary
-      ]);
-
-      // Catat pemotongan bahan baku
-      if (tx.deductedMaterials && tx.deductedMaterials.length > 0) {
-        const sheetLog = ss.getSheetByName(SHEET_LOG_BAHAN);
-        tx.deductedMaterials.forEach(function(mat) {
-          sheetLog.appendRow([
-            tx.timestamp || new Date().toISOString(),
-            tx.id,
-            mat.rawMaterialId,
-            mat.rawMaterialName,
-            mat.quantity,
-            mat.unit
-          ]);
-          kurangiStokBahan(ss, mat.rawMaterialId, mat.quantity);
-        });
-      }
-
-      return createJsonResponse({ status: 'success', message: 'Transaksi tersimpan di Google Sheets' });
-    }
-
-    // 2. Simpan Beban Operasional
-    if (action === 'create_expense' && payload.data) {
-      const exp = payload.data;
-      const sheetBeban = ss.getSheetByName(SHEET_BEBAN);
-      sheetBeban.appendRow([
-        exp.timestamp || new Date().toISOString(),
-        exp.id,
-        exp.date,
-        exp.category,
-        exp.description,
-        exp.amount,
-        exp.paymentMethod,
-        exp.receiptNumber || '-'
-      ]);
-      return createJsonResponse({ status: 'success', message: 'Beban tersimpan' });
-    }
-
-    // 3. Simpan Rekap Shift Kasir
-    if (action === 'record_shift' && payload.data) {
-      const shift = payload.data;
-      const sheetShift = ss.getSheetByName(SHEET_SHIFT);
-      sheetShift.appendRow([
-        shift.id, shift.date, shift.cashierName, shift.startTime, shift.endTime || '-',
-        shift.initialCash, shift.cashSales, shift.nonCashSales, shift.actualCashEnding || 0,
-        shift.cashDifference || 0, shift.status, shift.notes || '-'
-      ]);
-      return createJsonResponse({ status: 'success', message: 'Shift tersimpan' });
-    }
-
-    // 4. Sinkronisasi Keseluruhan Master Data (Bulk Sync)
-    if (action === 'sync_all' && payload.data) {
-      const allData = payload.data;
-      if (allData.rawMaterials) {
-        const sBahan = ss.getSheetByName(SHEET_BAHAN_BAKU);
-        sBahan.clearContents();
-        sBahan.appendRow(['ID Bahan', 'Nama Bahan', 'SKU', 'Kategori', 'Stok Terkini', 'Satuan', 'Stok Minimum', 'Harga Beli/Satuan', 'Supplier']);
-        formatHeaderRow(sBahan, '#1e3a5f');
-        const rows = allData.rawMaterials.map(function(m) {
-          return [m.id, m.name, m.sku, m.category, m.currentStock, m.unit, m.minStockThreshold, m.costPerUnit, m.supplier];
-        });
-        if (rows.length > 0) sBahan.getRange(2, 1, rows.length, rows[0].length).setValues(rows);
-      }
-      return createJsonResponse({ status: 'success', message: 'Master data berhasil disinkronkan' });
-    }
-
-    return createJsonResponse({ status: 'error', message: 'Aksi tidak dikenal' });
-  } catch (error) {
-    return createJsonResponse({ status: 'error', message: error.toString() });
-  } finally {
-    lock.releaseLock();
-  }
-}
-
-function kurangiStokBahan(ss, rawMaterialId, qtyDeducted) {
-  const sheet = ss.getSheetByName(SHEET_BAHAN_BAKU);
-  if (!sheet) return;
-  const data = sheet.getDataRange().getValues();
-  for (let i = 1; i < data.length; i++) {
-    if (data[i][0] === rawMaterialId) {
-      const currentVal = Number(data[i][4]) || 0;
-      sheet.getRange(i + 1, 5).setValue(Math.max(0, currentVal - Number(qtyDeducted)));
-      break;
-    }
-  }
-}
-
-function initAllSheets(ss) {
-  let sTx = ss.getSheetByName(SHEET_TRANSAKSI);
-  if (!sTx) {
-    sTx = ss.insertSheet(SHEET_TRANSAKSI);
-    sTx.appendRow(['Waktu Transaksi', 'ID Transaksi', 'Saluran', 'Platform Online', 'Tipe Order', 'Nama Pelanggan', 'No HP', 'Metode Bayar', 'Subtotal', 'Diskon', 'Pajak', 'Total Tagihan', 'HPP', 'Laba Kotor', 'Kasir', 'Rincian Menu']);
-    formatHeaderRow(sTx, '#166534');
-  }
-  let sBahan = ss.getSheetByName(SHEET_BAHAN_BAKU);
-  if (!sBahan) {
-    sBahan = ss.insertSheet(SHEET_BAHAN_BAKU);
-    sBahan.appendRow(['ID Bahan', 'Nama Bahan', 'SKU', 'Kategori', 'Stok Terkini', 'Satuan', 'Stok Minimum', 'Harga Beli/Satuan', 'Supplier']);
-    formatHeaderRow(sBahan, '#1e3a5f');
-  }
-  let sBeban = ss.getSheetByName(SHEET_BEBAN);
-  if (!sBeban) {
-    sBeban = ss.insertSheet(SHEET_BEBAN);
-    sBeban.appendRow(['Waktu Catat', 'ID Beban', 'Tanggal', 'Kategori Beban', 'Keterangan', 'Nominal (Rp)', 'Metode Bayar', 'No Bukti']);
-    formatHeaderRow(sBeban, '#991b1b');
-  }
-  let sLog = ss.getSheetByName(SHEET_LOG_BAHAN);
-  if (!sLog) {
-    sLog = ss.insertSheet(SHEET_LOG_BAHAN);
-    sLog.appendRow(['Waktu Pemakaian', 'ID Transaksi', 'ID Bahan', 'Nama Bahan', 'Qty Terpakai', 'Satuan']);
-    formatHeaderRow(sLog, '#475569');
-  }
-  let sShift = ss.getSheetByName(SHEET_SHIFT);
-  if (!sShift) {
-    sShift = ss.insertSheet(SHEET_SHIFT);
-    sShift.appendRow(['ID Shift', 'Tanggal', 'Kasir', 'Mulai', 'Selesai', 'Modal Awal', 'Penjualan Tunai', 'Penjualan Non-Tunai', 'Kas Aktual', 'Selisih', 'Status', 'Catatan']);
-    formatHeaderRow(sShift, '#581c87');
-  }
-}
-
-function formatHeaderRow(sheet, hexColor) {
-  const lastCol = sheet.getLastColumn();
-  if (lastCol < 1) return;
-  const range = sheet.getRange(1, 1, 1, lastCol);
-  range.setBackground(hexColor);
-  range.setFontColor('#ffffff');
-  range.setFontWeight('bold');
-  range.setHorizontalAlignment('center');
-  sheet.setFrozenRows(1);
-}
-
-function getSheetDataAsJson(sheet) {
-  if (!sheet) return [];
-  const data = sheet.getDataRange().getValues();
-  if (data.length <= 1) return [];
-  const headers = data[0];
-  const rows = [];
-  for (let i = 1; i < data.length; i++) {
-    const obj = {};
-    for (let j = 0; j < headers.length; j++) obj[headers[j]] = data[i][j];
-    rows.push(obj);
-  }
-  return rows;
-}
-
-function createJsonResponse(output) {
-  return ContentService.createTextOutput(JSON.stringify(output)).setMimeType(ContentService.MimeType.JSON);
-}`;
-
 export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
   isOpen,
   onClose,
 }) => {
-  const { rawMaterials, menuItems } = useApp();
+  const { rawMaterials, menuItems, cloudSync } = useApp();
 
   const [activeTab, setActiveTab] = useState<'config' | 'script' | 'cloudflare'>('config');
   const [config, setConfig] = useState<GoogleSheetsConfig>(googleSheetsService.getConfig());
@@ -286,6 +41,7 @@ export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
   const [copiedCode, setCopiedCode] = useState<boolean>(false);
   const [queueCount, setQueueCount] = useState<number>(0);
   const [isFlushingQueue, setIsFlushingQueue] = useState<boolean>(false);
+  const [copiedLink, setCopiedLink] = useState<boolean>(false);
 
   useEffect(() => {
     if (isOpen) {
@@ -320,6 +76,19 @@ export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
       success: true,
       message: 'Pengaturan Google Sheets berhasil disimpan!',
     });
+    cloudSync.syncNow(); // langsung tarik/kirim data ke perangkat lain
+  };
+
+  const handleCopySetupLink = async () => {
+    const link = googleSheetsService.buildSetupLink();
+    if (!link) return;
+    try {
+      await navigator.clipboard.writeText(link);
+    } catch {
+      window.prompt('Salin link ini lalu buka di HP:', link);
+    }
+    setCopiedLink(true);
+    setTimeout(() => setCopiedLink(false), 2500);
   };
 
   const handleBulkSync = async () => {
@@ -492,6 +261,79 @@ export const GoogleSheetsModal: React.FC<GoogleSheetsModalProps> = ({
                     </div>
                   </div>
                 )}
+              </div>
+
+              {/* Sinkronisasi Antar Perangkat */}
+              <div className="p-4 rounded-xl bg-neutral-950 border border-neutral-800 space-y-3">
+                <div className="flex items-center justify-between gap-2">
+                  <h4 className="font-bold text-white text-xs">Sinkronisasi Antar Perangkat (Desktop &amp; HP)</h4>
+                  <span
+                    className={`px-2 py-0.5 rounded text-[10px] font-bold border ${
+                      cloudSync.status === 'synced'
+                        ? 'bg-emerald-500/20 text-emerald-400 border-emerald-500/30'
+                        : cloudSync.status === 'syncing'
+                        ? 'bg-amber-500/20 text-amber-300 border-amber-500/30'
+                        : cloudSync.status === 'error'
+                        ? 'bg-red-500/20 text-red-300 border-red-500/30'
+                        : 'bg-neutral-800 text-neutral-400 border-neutral-700'
+                    }`}
+                  >
+                    {cloudSync.status === 'synced'
+                      ? 'Tersinkron'
+                      : cloudSync.status === 'syncing'
+                      ? 'Menyinkronkan...'
+                      : cloudSync.status === 'error'
+                      ? 'Gagal'
+                      : cloudSync.status === 'off'
+                      ? 'Belum aktif'
+                      : 'Siap'}
+                  </span>
+                </div>
+
+                <p className="text-[11px] text-neutral-400 leading-relaxed">
+                  Data bahan baku, menu, transaksi, beban, dan pelanggan otomatis disimpan ke Google Sheets (sheet{' '}
+                  <span className="font-mono text-neutral-300">App_Data</span>) dan ditarik ke perangkat lain. Setiap
+                  perangkat cukup diisi URL yang sama <strong>sekali</strong> — gunakan tombol di bawah untuk menyiapkan HP.
+                </p>
+
+                {cloudSync.status === 'error' && cloudSync.message && (
+                  <div className="p-2.5 rounded-lg bg-red-950/60 border border-red-500/40 text-red-300 text-[11px] leading-relaxed">
+                    {cloudSync.message}
+                  </div>
+                )}
+
+                <div className="flex flex-wrap items-center gap-2">
+                  <button
+                    type="button"
+                    onClick={() => cloudSync.syncNow()}
+                    disabled={!config.webAppUrl || cloudSync.status === 'syncing'}
+                    className="px-3.5 py-2 bg-emerald-600 hover:bg-emerald-500 text-white font-bold rounded-lg flex items-center gap-2 transition disabled:opacity-50"
+                  >
+                    <RefreshCw className={`w-3.5 h-3.5 ${cloudSync.status === 'syncing' ? 'animate-spin' : ''}`} />
+                    <span>Sinkronkan Sekarang</span>
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleCopySetupLink}
+                    disabled={!config.webAppUrl}
+                    className="px-3.5 py-2 bg-neutral-800 hover:bg-neutral-700 text-white font-semibold rounded-lg border border-neutral-700 flex items-center gap-2 transition disabled:opacity-50"
+                  >
+                    {copiedLink ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
+                    <span>{copiedLink ? 'Link tersalin!' : 'Salin Link Setup untuk HP'}</span>
+                  </button>
+                  {cloudSync.lastSyncedAt && (
+                    <span className="text-[10px] text-neutral-500">
+                      Terakhir: {new Date(cloudSync.lastSyncedAt).toLocaleTimeString('id-ID')}
+                    </span>
+                  )}
+                </div>
+
+                <p className="text-[10px] text-neutral-500 leading-relaxed">
+                  Tempel link setup itu di browser HP (kirim lewat WhatsApp ke diri sendiri). URL tersimpan otomatis,
+                  lalu data desktop muncul. Kode Apps Script harus versi terbaru (tab &quot;Kode Apps Script&quot;) dan
+                  di-deploy sebagai <strong>versi baru</strong>. Siapa pun yang memegang URL bisa membaca/menulis data —
+                  jangan dibagikan.
+                </p>
               </div>
 
               {/* Automation Toggles */}

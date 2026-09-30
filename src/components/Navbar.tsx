@@ -41,7 +41,7 @@ export const Navbar: React.FC<NavbarProps> = ({
   onOpenSheetsModal,
   onOpenDownloadModal,
 }) => {
-  const { lowStockItems, currentShift, storeSettings, customers } = useApp();
+  const { lowStockItems, currentShift, storeSettings, customers, cloudSync } = useApp();
 
   const navItems: { id: ActiveTab; label: string; icon: React.ComponentType<{ className?: string }> }[] = [
     { id: 'pos', label: 'Kasir POS', icon: ShoppingBag },
@@ -134,6 +134,26 @@ export const Navbar: React.FC<NavbarProps> = ({
             >
               <FileSpreadsheet className="w-3.5 h-3.5 text-emerald-400" />
               <span className="hidden md:inline font-bold">Google Sheets</span>
+              <span
+                className={`w-2 h-2 rounded-full ${
+                  cloudSync.status === 'synced'
+                    ? 'bg-emerald-400'
+                    : cloudSync.status === 'syncing'
+                    ? 'bg-amber-400 animate-pulse'
+                    : cloudSync.status === 'error'
+                    ? 'bg-red-500'
+                    : 'bg-neutral-600'
+                }`}
+                title={
+                  cloudSync.status === 'synced'
+                    ? 'Data tersinkron antar perangkat'
+                    : cloudSync.status === 'syncing'
+                    ? 'Menyinkronkan...'
+                    : cloudSync.status === 'error'
+                    ? 'Sinkronisasi gagal: ' + (cloudSync.message || '')
+                    : 'Sinkronisasi belum aktif (isi URL Google Sheets)'
+                }
+              />
             </button>
 
             {onOpenDownloadModal && (

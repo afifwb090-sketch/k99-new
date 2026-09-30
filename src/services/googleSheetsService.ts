@@ -9,6 +9,12 @@ export interface GoogleSheetsConfig {
   lastErrorMessage: string | null;
 }
 
+// URL bawaan (opsional) lewat variabel build VITE_GAS_URL, mis. di Cloudflare Pages > Settings > Variables.
+// Dipakai otomatis di perangkat yang belum pernah mengisi URL sendiri.
+const DEFAULT_WEB_APP_URL: string = (import.meta.env?.VITE_GAS_URL as string | undefined)?.trim() || '';
+
+const GAS_URL_PREFIX = 'https://script.google.com/macros/s/';
+
 const STORAGE_KEY_CONFIG = 'k99_sheets_config_v1';
 const STORAGE_KEY_QUEUE = 'k99_sheets_queue_v1';
 
@@ -46,20 +52,53 @@ export class GoogleSheetsService {
     try {
       const saved = localStorage.getItem(STORAGE_KEY_CONFIG);
       if (saved) {
-        return JSON.parse(saved);
+        const parsed = JSON.parse(saved) as GoogleSheetsConfig;
+        if (!parsed.webAppUrl && DEFAULT_WEB_APP_URL) parsed.webAppUrl = DEFAULT_WEB_APP_URL;
+        return parsed;
       }
     } catch (e) {
       console.warn('Failed to load Google Sheets config:', e);
     }
 
     return {
-      webAppUrl: '',
+      webAppUrl: DEFAULT_WEB_APP_URL,
       autoSyncOnCheckout: true,
       autoSyncOnExpense: true,
       lastSyncTime: null,
       lastStatus: 'idle',
       lastErrorMessage: null,
     };
+  }
+
+  /**
+   * Link satu-klik untuk menyiapkan perangkat lain (HP): membuka link ini otomatis
+   * menyimpan URL Apps Script di perangkat tersebut.
+   */
+  public buildSetupLink(): string {
+    const url = this.getConfig().webAppUrl;
+    if (!url || typeof window === 'undefined') return '';
+    return `${window.location.origin}/?gas=${encodeURIComponent(url)}`;
+  }
+
+  /**
+   * Dipanggil sekali saat aplikasi dibuka: jika ada ?gas=<url> di alamat, simpan lalu bersihkan alamat.
+   */
+  public importSetupFromLocation(): boolean {
+    if (typeof window === 'undefined') return false;
+    try {
+      const params = new URLSearchParams(window.location.search);
+      const gas = params.get('gas');
+      if (!gas) return false;
+      params.delete('gas');
+      const qs = params.toString();
+      window.history.replaceState({}, '', window.location.pathname + (qs ? `?${qs}` : '') + window.location.hash);
+      const clean = gas.trim();
+      if (!clean.startsWith(GAS_URL_PREFIX)) return false;
+      this.saveConfig({ webAppUrl: clean });
+      return true;
+    } catch {
+      return false;
+    }
   }
 
   public saveConfig(updates: Partial<GoogleSheetsConfig>): GoogleSheetsConfig {

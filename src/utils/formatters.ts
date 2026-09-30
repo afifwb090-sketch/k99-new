@@ -58,7 +58,9 @@ export function generateId(prefix: string): string {
   const now = new Date();
   const dateStr = now.toISOString().slice(2, 10).replace(/-/g, '');
   const rand = Math.floor(1000 + Math.random() * 9000);
-  return `${prefix}-${dateStr}-${rand}`;
+  // Akhiran acak 2 karakter: mencegah ID kembar (terutama saat data dari beberapa perangkat digabung)
+  const suffix = Math.random().toString(36).slice(2, 4).toUpperCase().padEnd(2, '0');
+  return `${prefix}-${dateStr}-${rand}${suffix}`;
 }
 
 export function downloadCSV(filename: string, csvContent: string): void {

@@ -13,8 +13,10 @@ import {
   Download,
   X,
   FileSpreadsheet,
+  Pencil,
+  Trash2,
 } from 'lucide-react';
-import { RawMaterial, MaterialCategory, StockMovement } from '../types';
+import { RawMaterial, MaterialCategory, MaterialUnit, StockMovement } from '../types';
 import { useApp } from '../context/AppContext';
 import { formatIDR, formatNumber, formatDateTime, downloadCSV } from '../utils/formatters';
 
@@ -26,6 +28,9 @@ export const InventoryView: React.FC = () => {
     adjustMaterialStock,
     addRawMaterial,
     updateRawMaterial,
+    deleteRawMaterial,
+    menuItems,
+    updateMenuRecipe,
     lowStockItems,
   } = useApp();
 
@@ -56,7 +61,22 @@ export const InventoryView: React.FC = () => {
   const [newMatStock, setNewMatStock] = useState<number>(0);
   const [newMatUnit, setNewMatUnit] = useState<any>('g');
   const [newMatMinStock, setNewMatMinStock] = useState<number>(500);
-  const [newMatCost, setNewMatCost] = useState<number>(150);
+  const [newMatPrice, setNewMatPrice] = useState<string>(''); // total harga beli (Rp)
+  const [newMatCostManual, setNewMatCostManual] = useState<string | null>(null); // override HPP manual
+
+  // Edit & hapus bahan baku
+  const [editItem, setEditItem] = useState<RawMaterial | null>(null);
+  const [editName, setEditName] = useState<string>('');
+  const [editSku, setEditSku] = useState<string>('');
+  const [editCategory, setEditCategory] = useState<MaterialCategory>('Biji Kopi');
+  const [editUnit, setEditUnit] = useState<MaterialUnit>('g');
+  const [editStock, setEditStock] = useState<string>('0');
+  const [editMinStock, setEditMinStock] = useState<string>('0');
+  const [editCost, setEditCost] = useState<string>('0');
+  const [editSupplier, setEditSupplier] = useState<string>('');
+  const [editCalcPrice, setEditCalcPrice] = useState<string>('');
+  const [editCalcQty, setEditCalcQty] = useState<string>('');
+  const [deleteItem, setDeleteItem] = useState<RawMaterial | null>(null);
   const [newMatSupplier, setNewMatSupplier] = useState<string>('');
 
   const categories = [
@@ -126,6 +146,67 @@ export const InventoryView: React.FC = () => {
     setAdjustItem(null);
   };
 
+  // HPP per unit = harga beli total / jumlah (2 desimal); bisa di-override manual
+  const calcUnitCost = (price: number, qty: number): number =>
+    qty > 0 && price > 0 ? Math.round((price / qty) * 100) / 100 : 0;
+  const autoNewCost = calcUnitCost(Number(newMatPrice) || 0, Number(newMatStock) || 0);
+  const effectiveNewCost = newMatCostManual !== null ? Number(newMatCostManual) || 0 : autoNewCost;
+
+  const openEdit = (mat: RawMaterial) => {
+    setEditItem(mat);
+    setEditName(mat.name);
+    setEditSku(mat.sku);
+    setEditCategory(mat.category);
+    setEditUnit(mat.unit);
+    setEditStock(String(mat.currentStock));
+    setEditMinStock(String(mat.minStockThreshold));
+    setEditCost(String(mat.costPerUnit));
+    setEditSupplier(mat.supplier);
+    setEditCalcPrice('');
+    setEditCalcQty('');
+  };
+
+  const handleEditSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!editItem || !editName.trim()) return;
+
+    const newStock = Math.max(0, Number(editStock) || 0);
+    const stockChanged = newStock !== editItem.currentStock;
+
+    updateRawMaterial({
+      ...editItem,
+      name: editName.trim(),
+      sku: editSku.trim() || editItem.sku,
+      category: editCategory,
+      unit: editUnit,
+      minStockThreshold: Math.max(0, Number(editMinStock) || 0),
+      costPerUnit: Math.max(0, Number(editCost) || 0),
+      supplier: editSupplier.trim() || 'Supplier Lokal',
+      currentStock: editItem.currentStock, // stok diubah lewat adjustMaterialStock agar tercatat di riwayat
+    });
+
+    if (stockChanged) {
+      adjustMaterialStock(editItem.id, newStock, 'MANUAL_ADJUSTMENT', 'Koreksi stok lewat Edit Bahan');
+    }
+
+    // Satuan berubah -> samakan satuan di semua resep yang memakai bahan ini
+    if (editUnit !== editItem.unit) {
+      menuItems.forEach((menu) => {
+        if (menu.recipe.some((r) => r.rawMaterialId === editItem.id)) {
+          updateMenuRecipe(
+            menu.id,
+            menu.recipe.map((r) => (r.rawMaterialId === editItem.id ? { ...r, unit: editUnit } : r))
+          );
+        }
+      });
+    }
+
+    setEditItem(null);
+  };
+
+  const usedInMenus = (materialId: string) =>
+    menuItems.filter((m) => m.recipe.some((r) => r.rawMaterialId === materialId));
+
   // Handle new material submit
   const handleAddNewMaterial = (e: React.FormEvent) => {
     e.preventDefault();
@@ -138,7 +219,7 @@ export const InventoryView: React.FC = () => {
       currentStock: Number(newMatStock),
       unit: newMatUnit,
       minStockThreshold: Number(newMatMinStock),
-      costPerUnit: Number(newMatCost),
+      costPerUnit: effectiveNewCost,
       lastPurchaseDate: new Date().toISOString().split('T')[0],
       supplier: newMatSupplier.trim() || 'Supplier Lokal',
     });
@@ -146,6 +227,9 @@ export const InventoryView: React.FC = () => {
     setIsAddModalOpen(false);
     setNewMatName('');
     setNewMatSku('');
+    setNewMatStock(0);
+    setNewMatPrice('');
+    setNewMatCostManual(null);
   };
 
   // Export inventory CSV
@@ -419,6 +503,20 @@ export const InventoryView: React.FC = () => {
                               title="Opname / Waste Penyesuaian"
                             >
                               <ArrowDownUp className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => openEdit(mat)}
+                              className="p-1 text-sky-300 hover:text-white bg-sky-500/10 hover:bg-sky-500/25 rounded-md border border-sky-500/30 transition-colors"
+                              title="Edit bahan baku"
+                            >
+                              <Pencil className="w-3.5 h-3.5" />
+                            </button>
+                            <button
+                              onClick={() => setDeleteItem(mat)}
+                              className="p-1 text-red-400 hover:text-white bg-red-950/40 hover:bg-red-700 rounded-md border border-red-900/60 transition-colors"
+                              title="Hapus bahan baku"
+                            >
+                              <Trash2 className="w-3.5 h-3.5" />
                             </button>
                           </div>
                         </td>
@@ -783,20 +881,72 @@ export const InventoryView: React.FC = () => {
                     <option value="ml">Mililiter (ml)</option>
                     <option value="pcs">Pieces (pcs)</option>
                     <option value="sheet">Lembar (sheet)</option>
+                    <option value="pack">Pack / Bungkus (pack)</option>
                   </select>
                 </div>
               </div>
 
-              <div className="grid grid-cols-3 gap-3">
+              <div className="grid grid-cols-2 gap-3">
                 <div>
-                  <label className="block text-neutral-300 font-semibold mb-1">Stok Awal</label>
+                  <label className="block text-neutral-300 font-semibold mb-1">
+                    Jumlah Dibeli / Stok Awal ({newMatUnit})
+                  </label>
                   <input
                     type="number"
                     min="0"
+                    step="any"
                     value={newMatStock}
                     onChange={(e) => setNewMatStock(Number(e.target.value))}
                     className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-amber-500"
                   />
+                </div>
+                <div>
+                  <label className="block text-neutral-300 font-semibold mb-1">Harga Beli Total (Rp)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    inputMode="decimal"
+                    value={newMatPrice}
+                    onChange={(e) => setNewMatPrice(e.target.value)}
+                    placeholder="Contoh: 85000"
+                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-neutral-300 font-semibold mb-1">
+                    HPP per {newMatUnit} (Rp)
+                    {newMatCostManual === null ? (
+                      <span className="ml-1.5 text-[10px] font-medium text-emerald-400">otomatis</span>
+                    ) : (
+                      <button
+                        type="button"
+                        onClick={() => setNewMatCostManual(null)}
+                        className="ml-1.5 text-[10px] font-medium text-amber-400 underline"
+                      >
+                        hitung otomatis
+                      </button>
+                    )}
+                  </label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    inputMode="decimal"
+                    value={newMatCostManual !== null ? newMatCostManual : autoNewCost || ''}
+                    onChange={(e) => setNewMatCostManual(e.target.value)}
+                    placeholder="0"
+                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-amber-300 font-mono focus:outline-none focus:border-amber-500"
+                  />
+                  <p className="mt-1 text-[10px] text-neutral-500 leading-snug">
+                    = Harga beli ÷ jumlah dibeli
+                    {Number(newMatPrice) > 0 && Number(newMatStock) > 0
+                      ? ` (${formatIDR(Number(newMatPrice))} ÷ ${formatNumber(Number(newMatStock))} ${newMatUnit})`
+                      : ''}
+                  </p>
                 </div>
                 <div>
                   <label className="block text-neutral-300 font-semibold mb-1">Batas Minimum</label>
@@ -805,16 +955,6 @@ export const InventoryView: React.FC = () => {
                     min="0"
                     value={newMatMinStock}
                     onChange={(e) => setNewMatMinStock(Number(e.target.value))}
-                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-amber-500"
-                  />
-                </div>
-                <div>
-                  <label className="block text-neutral-300 font-semibold mb-1">HPP per Unit (Rp)</label>
-                  <input
-                    type="number"
-                    min="1"
-                    value={newMatCost}
-                    onChange={(e) => setNewMatCost(Number(e.target.value))}
                     className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-amber-500"
                   />
                 </div>
@@ -847,6 +987,253 @@ export const InventoryView: React.FC = () => {
                 </button>
               </div>
             </form>
+          </div>
+        </div>
+      )}
+      {/* Edit Material Modal */}
+      {editItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4">
+          <div className="w-full max-w-lg max-h-[92vh] overflow-y-auto bg-neutral-900 border border-neutral-800 rounded-xl shadow-2xl">
+            <div className="flex items-center justify-between px-6 py-4 border-b border-neutral-800 bg-neutral-900/60 sticky top-0">
+              <h3 className="text-base font-bold text-white">Edit Bahan Baku</h3>
+              <button onClick={() => setEditItem(null)} className="p-1.5 text-neutral-400 hover:text-white rounded-lg">
+                <X className="w-5 h-5" />
+              </button>
+            </div>
+
+            <form onSubmit={handleEditSubmit} className="p-6 space-y-3.5 text-xs">
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-neutral-300 font-semibold mb-1">Nama Bahan</label>
+                  <input
+                    type="text"
+                    required
+                    value={editName}
+                    onChange={(e) => setEditName(e.target.value)}
+                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-neutral-300 font-semibold mb-1">SKU / Kode Bahan</label>
+                  <input
+                    type="text"
+                    value={editSku}
+                    onChange={(e) => setEditSku(e.target.value)}
+                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              <div className="grid grid-cols-2 gap-3">
+                <div>
+                  <label className="block text-neutral-300 font-semibold mb-1">Kategori</label>
+                  <select
+                    value={editCategory}
+                    onChange={(e) => setEditCategory(e.target.value as MaterialCategory)}
+                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-amber-500"
+                  >
+                    {categories.filter((c) => c !== 'Semua').map((c) => (
+                      <option key={c} value={c}>
+                        {c}
+                      </option>
+                    ))}
+                  </select>
+                </div>
+                <div>
+                  <label className="block text-neutral-300 font-semibold mb-1">Satuan</label>
+                  <select
+                    value={editUnit}
+                    onChange={(e) => setEditUnit(e.target.value as MaterialUnit)}
+                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-amber-500"
+                  >
+                    <option value="g">Gram (g)</option>
+                    <option value="ml">Mililiter (ml)</option>
+                    <option value="pcs">Pieces (pcs)</option>
+                    <option value="sheet">Lembar (sheet)</option>
+                    <option value="pack">Pack / Bungkus (pack)</option>
+                  </select>
+                </div>
+              </div>
+
+              {editUnit !== editItem.unit && (
+                <div className="p-2.5 rounded-lg bg-amber-950/50 border border-amber-700/50 text-amber-200 text-[11px] leading-relaxed">
+                  Mengganti satuan <strong>tidak</strong> mengonversi angka. Sesuaikan juga stok, HPP per unit, dan
+                  jumlah di resep agar sesuai satuan baru ({editItem.unit} → {editUnit}).
+                </div>
+              )}
+
+              <div className="grid grid-cols-3 gap-3">
+                <div>
+                  <label className="block text-neutral-300 font-semibold mb-1">Stok ({editUnit})</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={editStock}
+                    onChange={(e) => setEditStock(e.target.value)}
+                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-neutral-300 font-semibold mb-1">Batas Min.</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={editMinStock}
+                    onChange={(e) => setEditMinStock(e.target.value)}
+                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white font-mono focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+                <div>
+                  <label className="block text-neutral-300 font-semibold mb-1">HPP / {editUnit} (Rp)</label>
+                  <input
+                    type="number"
+                    min="0"
+                    step="any"
+                    value={editCost}
+                    onChange={(e) => setEditCost(e.target.value)}
+                    className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-amber-300 font-mono focus:outline-none focus:border-amber-500"
+                  />
+                </div>
+              </div>
+
+              {Number(editStock) !== editItem.currentStock && (
+                <p className="text-[11px] text-neutral-400">
+                  Perubahan stok ({formatNumber(editItem.currentStock)} → {formatNumber(Number(editStock) || 0)}{' '}
+                  {editItem.unit}) akan dicatat di Riwayat Pergerakan sebagai koreksi manual.
+                </p>
+              )}
+
+              {/* Bantuan hitung HPP dari harga beli */}
+              <div className="p-3 rounded-lg bg-neutral-950 border border-neutral-800 space-y-2">
+                <div className="text-[11px] font-semibold text-neutral-300">Hitung HPP dari harga beli</div>
+                <div className="grid grid-cols-[1fr_1fr_auto] gap-2 items-end">
+                  <div>
+                    <label className="block text-[10px] text-neutral-500 mb-0.5">Harga beli total (Rp)</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={editCalcPrice}
+                      onChange={(e) => setEditCalcPrice(e.target.value)}
+                      className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-2.5 py-1.5 text-white font-mono focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                  <div>
+                    <label className="block text-[10px] text-neutral-500 mb-0.5">Jumlah ({editUnit})</label>
+                    <input
+                      type="number"
+                      min="0"
+                      step="any"
+                      value={editCalcQty}
+                      onChange={(e) => setEditCalcQty(e.target.value)}
+                      className="w-full bg-neutral-900 border border-neutral-700 rounded-lg px-2.5 py-1.5 text-white font-mono focus:outline-none focus:border-amber-500"
+                    />
+                  </div>
+                  <button
+                    type="button"
+                    disabled={!(Number(editCalcPrice) > 0 && Number(editCalcQty) > 0)}
+                    onClick={() =>
+                      setEditCost(String(calcUnitCost(Number(editCalcPrice), Number(editCalcQty))))
+                    }
+                    className="px-3 py-1.5 font-semibold text-amber-300 bg-amber-500/10 hover:bg-amber-500/20 border border-amber-500/30 rounded-lg disabled:opacity-40"
+                  >
+                    Terapkan
+                  </button>
+                </div>
+              </div>
+
+              <div>
+                <label className="block text-neutral-300 font-semibold mb-1">Supplier / Pemasok</label>
+                <input
+                  type="text"
+                  value={editSupplier}
+                  onChange={(e) => setEditSupplier(e.target.value)}
+                  className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-amber-500"
+                />
+              </div>
+
+              <div className="pt-3 border-t border-neutral-800 flex justify-between gap-2">
+                <button
+                  type="button"
+                  onClick={() => {
+                    const target = editItem;
+                    setEditItem(null);
+                    setDeleteItem(target);
+                  }}
+                  className="px-3 py-2 text-red-400 hover:text-white bg-red-950/40 hover:bg-red-700 border border-red-900/60 rounded-lg flex items-center gap-1.5"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  Hapus
+                </button>
+                <div className="flex gap-2">
+                  <button
+                    type="button"
+                    onClick={() => setEditItem(null)}
+                    className="px-4 py-2 text-neutral-400 hover:text-white bg-neutral-800 rounded-lg"
+                  >
+                    Batal
+                  </button>
+                  <button
+                    type="submit"
+                    className="px-5 py-2 font-bold text-white bg-amber-600 hover:bg-amber-500 rounded-lg shadow-sm"
+                  >
+                    Simpan Perubahan
+                  </button>
+                </div>
+              </div>
+            </form>
+          </div>
+        </div>
+      )}
+
+      {/* Delete Material Confirm */}
+      {deleteItem && (
+        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-xs p-4">
+          <div className="w-full max-w-md bg-neutral-900 border border-red-900/60 rounded-xl overflow-hidden shadow-2xl">
+            <div className="px-6 py-4 border-b border-neutral-800 flex items-center gap-2 text-red-300">
+              <Trash2 className="w-4 h-4" />
+              <h3 className="text-base font-bold text-white">Hapus Bahan Baku?</h3>
+            </div>
+            <div className="p-6 space-y-3 text-xs text-neutral-300 leading-relaxed">
+              <p>
+                <strong className="text-white">{deleteItem.name}</strong> ({deleteItem.sku}) akan dihapus
+                {deleteItem.currentStock > 0 && (
+                  <>
+                    {' '}
+                    beserta sisa stok {formatNumber(deleteItem.currentStock)} {deleteItem.unit} (senilai{' '}
+                    {formatIDR(deleteItem.currentStock * deleteItem.costPerUnit)})
+                  </>
+                )}
+                .
+              </p>
+              {usedInMenus(deleteItem.id).length > 0 && (
+                <div className="p-2.5 rounded-lg bg-amber-950/50 border border-amber-700/50 text-amber-200">
+                  Bahan ini dipakai di {usedInMenus(deleteItem.id).length} resep menu:{' '}
+                  <strong>{usedInMenus(deleteItem.id).map((m) => m.name).join(', ')}</strong>. Bahan akan dilepas dari
+                  resep tersebut sehingga HPP menu berubah.
+                </div>
+              )}
+              <p className="text-neutral-500">Riwayat transaksi & pergerakan stok lama tetap tersimpan.</p>
+            </div>
+            <div className="px-6 py-4 border-t border-neutral-800 flex justify-end gap-2">
+              <button
+                onClick={() => setDeleteItem(null)}
+                className="px-4 py-2 text-xs text-neutral-300 hover:text-white bg-neutral-800 rounded-lg"
+              >
+                Batal
+              </button>
+              <button
+                onClick={() => {
+                  deleteRawMaterial(deleteItem.id);
+                  setDeleteItem(null);
+                }}
+                className="px-5 py-2 text-xs font-bold text-white bg-red-600 hover:bg-red-500 rounded-lg"
+              >
+                Ya, Hapus
+              </button>
+            </div>
           </div>
         </div>
       )}
