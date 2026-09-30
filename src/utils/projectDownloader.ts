@@ -1,4 +1,4 @@
-export const downloadProjectZip = () => {
+export const downloadProjectZip = (_onStatus?: (status: string) => void) => {
   console.log("Download project zip");
 };
 

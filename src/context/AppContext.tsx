@@ -23,6 +23,7 @@ import {
   initialShift,
   initialStoreSettings,
   initialCustomers,
+  emptyShift,
 } from '../data/initialData';
 import { generateId } from '../utils/formatters';
 import { googleSheetsService } from '../services/googleSheetsService';
@@ -128,6 +129,7 @@ interface AppContextType {
   // Settings & Storage
   updateSettings: (settings: StoreSettings) => void;
   resetToInitialData: () => void;
+  clearAllData: () => void;
 
   // Computed & Helpers
   lowStockItems: RawMaterial[];
@@ -142,12 +144,12 @@ const STORAGE_KEY = 'k99_coffee_pos_data_v2';
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [rawMaterials, setRawMaterials] = useState<RawMaterial[]>(() => {
     const saved = localStorage.getItem(`${STORAGE_KEY}_materials`);
-    return saved ? JSON.parse(saved) : initialRawMaterials;
+    return saved ? JSON.parse(saved) : [];
   });
 
   const [menuItems, setMenuItems] = useState<MenuItem[]>(() => {
     const saved = localStorage.getItem(`${STORAGE_KEY}_menu`);
-    return saved ? JSON.parse(saved) : initialMenuItems;
+    return saved ? JSON.parse(saved) : [];
   });
 
   const [cart, setCart] = useState<CartItem[]>(() => {
@@ -157,22 +159,22 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [transactions, setTransactions] = useState<Transaction[]>(() => {
     const saved = localStorage.getItem(`${STORAGE_KEY}_transactions`);
-    return saved ? JSON.parse(saved) : initialTransactions;
+    return saved ? JSON.parse(saved) : [];
   });
 
   const [stockMovements, setStockMovements] = useState<StockMovement[]>(() => {
     const saved = localStorage.getItem(`${STORAGE_KEY}_stock_movements`);
-    return saved ? JSON.parse(saved) : initialStockMovements;
+    return saved ? JSON.parse(saved) : [];
   });
 
   const [expenses, setExpenses] = useState<Expense[]>(() => {
     const saved = localStorage.getItem(`${STORAGE_KEY}_expenses`);
-    return saved ? JSON.parse(saved) : initialExpenses;
+    return saved ? JSON.parse(saved) : [];
   });
 
   const [currentShift, setCurrentShift] = useState<Shift>(() => {
     const saved = localStorage.getItem(`${STORAGE_KEY}_shift`);
-    return saved ? JSON.parse(saved) : initialShift;
+    return saved ? JSON.parse(saved) : emptyShift;
   });
 
   const [storeSettings, setStoreSettings] = useState<StoreSettings>(() => {
@@ -182,7 +184,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [customers, setCustomers] = useState<Customer[]>(() => {
     const saved = localStorage.getItem(`${STORAGE_KEY}_customers`);
-    return saved ? JSON.parse(saved) : initialCustomers;
+    return saved ? JSON.parse(saved) : [];
   });
 
   // Persist to localStorage
@@ -821,6 +823,25 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setCustomers(initialCustomers);
   };
 
+  // Kosongkan seluruh data operasional (bahan baku, menu, transaksi, beban, pelanggan, shift, antrean sync).
+  // Profil toko (nama, alamat, pajak, dsb.) sengaja dipertahankan.
+  const clearAllData = () => {
+    googleSheetsService.clearQueue();
+
+    setRawMaterials([]);
+    setMenuItems([]);
+    setCart([]);
+    setTransactions([]);
+    setStockMovements([]);
+    setExpenses([]);
+    setCurrentShift({
+      ...emptyShift,
+      startTime: new Date().toISOString(),
+      date: new Date().toISOString().slice(0, 10),
+    });
+    setCustomers([]);
+  };
+
   // Financial Metrics Aggregator
   const getFinancialMetrics = (startDate?: string, endDate?: string): FinancialMetrics => {
     const completedTxs = transactions.filter((t) => {
@@ -943,6 +964,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         closeShift,
         updateSettings,
         resetToInitialData,
+        clearAllData,
         lowStockItems,
         calculateRecipeCOGS,
         getFinancialMetrics,

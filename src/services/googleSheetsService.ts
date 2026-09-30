@@ -29,6 +29,9 @@ export class GoogleSheetsService {
       window.addEventListener('online', () => {
         this.processQueue();
       });
+      // Coba kirim antrean saat aplikasi dibuka & berkala (tidak bergantung navigator.onLine)
+      setTimeout(() => this.processQueue(), 3000);
+      setInterval(() => this.processQueue(), 60000);
     }
   }
 
@@ -155,10 +158,6 @@ export class GoogleSheetsService {
       return false;
     }
 
-    if (!navigator.onLine) {
-      this.enqueueItem('create_transaction', tx);
-      return false;
-    }
 
     try {
       const res = await fetch(config.webAppUrl, {
@@ -199,10 +198,6 @@ export class GoogleSheetsService {
       return false;
     }
 
-    if (!navigator.onLine) {
-      this.enqueueItem('create_expense', expense);
-      return false;
-    }
 
     try {
       const res = await fetch(config.webAppUrl, {
@@ -240,10 +235,6 @@ export class GoogleSheetsService {
     const config = this.getConfig();
     if (!config.webAppUrl) return false;
 
-    if (!navigator.onLine) {
-      this.enqueueItem('record_shift', shift);
-      return false;
-    }
 
     try {
       const res = await fetch(config.webAppUrl, {
@@ -331,6 +322,14 @@ export class GoogleSheetsService {
     }
   }
 
+  public clearQueue(): void {
+    try {
+      localStorage.removeItem(STORAGE_KEY_QUEUE);
+    } catch {
+      /* abaikan */
+    }
+  }
+
   private saveQueue(items: QueuedSyncItem[]): void {
     try {
       localStorage.setItem(STORAGE_KEY_QUEUE, JSON.stringify(items));
@@ -351,13 +350,16 @@ export class GoogleSheetsService {
     this.saveQueue(queue);
   }
 
+  private isProcessing = false;
+
   public async processQueue(): Promise<number> {
     const config = this.getConfig();
-    if (!config.webAppUrl || !navigator.onLine) return 0;
+    if (!config.webAppUrl || this.isProcessing) return 0;
 
     const queue = this.getQueue();
     if (queue.length === 0) return 0;
 
+    this.isProcessing = true;
     const remaining: QueuedSyncItem[] = [];
     let syncedCount = 0;
 
@@ -386,6 +388,7 @@ export class GoogleSheetsService {
     }
 
     this.saveQueue(remaining);
+    this.isProcessing = false;
 
     if (syncedCount > 0) {
       this.saveConfig({

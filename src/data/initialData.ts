@@ -1129,3 +1129,15 @@ export const initialStoreSettings: StoreSettings = {
   pointsPerAmount: 10000, // 1 poin setiap belanja Rp 10.000
   redemptionRate: 1000, // 1 poin = Diskon Rp 1.000 (10 poin = Rp 10.000)
 };
+
+// Shift kosong untuk mode "mulai dari nol" (belum ada shift yang dibuka)
+export const emptyShift: Shift = {
+  id: 'shift-none',
+  cashierName: 'Belum ada shift',
+  startTime: new Date().toISOString(),
+  date: new Date().toISOString().slice(0, 10),
+  initialCash: 0,
+  cashSales: 0,
+  nonCashSales: 0,
+  status: 'CLOSED',
+};

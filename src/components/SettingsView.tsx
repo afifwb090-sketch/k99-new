@@ -37,6 +37,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     storeSettings,
     updateSettings,
     resetToInitialData,
+    clearAllData,
     menuItems,
     addMenuItem,
     deleteMenuItem,
@@ -49,6 +50,8 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
   const [saveSuccess, setSaveSuccess] = useState<boolean>(false);
   const [resetSuccess, setResetSuccess] = useState<boolean>(false);
   const [showConfirmReset, setShowConfirmReset] = useState<boolean>(false);
+  const [showConfirmClear, setShowConfirmClear] = useState<boolean>(false);
+  const [clearSuccess, setClearSuccess] = useState<boolean>(false);
 
   // New menu modal
   const [isAddMenuOpen, setIsAddMenuOpen] = useState<boolean>(false);
@@ -289,18 +292,60 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                 <span>Unduh Cadangan JSON</span>
               </button>
 
+              {!showConfirmClear ? (
+                <button
+                  type="button"
+                  onClick={() => {
+                    setShowConfirmReset(false);
+                    setShowConfirmClear(true);
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 text-xs font-bold text-white bg-red-700 hover:bg-red-600 border border-red-500/60 rounded-lg transition-colors ml-auto"
+                >
+                  <Trash2 className="w-3.5 h-3.5" />
+                  <span>Kosongkan Semua Data (Mulai dari Nol)</span>
+                </button>
+              ) : (
+                <div className="flex flex-wrap items-center gap-2 ml-auto bg-red-950/80 border border-red-500/40 p-2 rounded-lg">
+                  <span className="text-[11px] text-red-200">
+                    Hapus semua bahan baku, menu, transaksi, beban, pelanggan & antrean sync di perangkat ini?
+                  </span>
+                  <button
+                    type="button"
+                    onClick={() => {
+                      clearAllData();
+                      setShowConfirmClear(false);
+                      setClearSuccess(true);
+                      setTimeout(() => setClearSuccess(false), 4000);
+                    }}
+                    className="px-2.5 py-1 text-[11px] font-bold bg-red-600 hover:bg-red-500 text-white rounded"
+                  >
+                    Ya, Kosongkan
+                  </button>
+                  <button
+                    type="button"
+                    onClick={() => setShowConfirmClear(false)}
+                    className="px-2 py-1 text-[11px] font-medium bg-neutral-800 hover:bg-neutral-700 text-neutral-300 rounded"
+                  >
+                    Batal
+                  </button>
+                </div>
+              )}
+
               {!showConfirmReset ? (
                 <button
                   type="button"
-                  onClick={() => setShowConfirmReset(true)}
-                  className="flex items-center gap-2 px-4 py-2 text-xs font-semibold text-red-400 hover:text-white bg-red-950/40 hover:bg-red-900/60 border border-red-900/60 rounded-lg transition-colors ml-auto"
+                  onClick={() => {
+                    setShowConfirmClear(false);
+                    setShowConfirmReset(true);
+                  }}
+                  className="flex items-center gap-2 px-4 py-2 text-xs font-semibold text-neutral-300 hover:text-white bg-neutral-800/60 hover:bg-neutral-700 border border-neutral-700 rounded-lg transition-colors"
                 >
                   <RotateCcw className="w-3.5 h-3.5" />
-                  <span>Reset ke Data Contoh Awal</span>
+                  <span>Muat Data Contoh (Demo)</span>
                 </button>
               ) : (
-                <div className="flex items-center gap-2 ml-auto bg-red-950/80 border border-red-500/40 p-2 rounded-lg">
-                  <span className="text-[11px] text-red-200">Yakin reset semua data?</span>
+                <div className="flex items-center gap-2 bg-red-950/80 border border-red-500/40 p-2 rounded-lg">
+                  <span className="text-[11px] text-red-200">Timpa semua data dengan data contoh?</span>
                   <button
                     type="button"
                     onClick={() => {
@@ -324,10 +369,17 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               )}
             </div>
 
+            {clearSuccess && (
+              <div className="p-3 bg-emerald-950/60 border border-emerald-500/30 text-emerald-300 text-xs rounded-lg flex items-center gap-2">
+                <Check className="w-4 h-4 text-emerald-400" />
+                <span>Semua data contoh dihapus. Silakan isi Bahan Baku, Menu & Resep secara manual.</span>
+              </div>
+            )}
+
             {resetSuccess && (
               <div className="p-3 bg-emerald-950/60 border border-emerald-500/30 text-emerald-300 text-xs rounded-lg flex items-center gap-2">
                 <Check className="w-4 h-4 text-emerald-400" />
-                <span>Data K99 Coffee berhasil direset ke data awal.</span>
+                <span>Data contoh (demo) berhasil dimuat.</span>
               </div>
             )}
           </div>
