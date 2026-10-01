@@ -1,57 +1,108 @@
-import React, { useState } from 'react';
-import { X, Check, Flame, Snowflake, Plus } from 'lucide-react';
-import { MenuItem, CartItem } from '../types';
+import React, { useMemo, useState } from 'react';
+import { X, Check, Plus, Save } from 'lucide-react';
+import { MenuItem, CartItem, CustomChoice } from '../types';
 import { formatIDR } from '../utils/formatters';
 import { useApp } from '../context/AppContext';
+import { computeLine, withDefaults } from '../utils/customization';
 
 interface VariantModalProps {
   item: MenuItem;
   onClose: () => void;
   onAddToCart: (customization: Partial<CartItem>) => void;
+  /** Isi awal pilihan (dipakai saat mengedit item yang sudah ada di keranjang) */
+  initial?: Partial<CartItem>;
+  /** Teks tombol konfirmasi; bawaan "Masukkan Pesanan" */
+  confirmLabel?: string;
 }
 
-export const VariantModal: React.FC<VariantModalProps> = ({
-  item,
-  onClose,
-  onAddToCart,
-}) => {
-  const { rawMaterials, calculateRecipeCOGS } = useApp();
+const chip = (active: boolean) =>
+  `flex items-center justify-between gap-2 py-2.5 px-3 rounded-lg border text-xs font-medium transition-colors text-left ${
+    active
+      ? 'bg-amber-600/20 border-amber-500 text-white'
+      : 'bg-neutral-800/60 border-neutral-700 text-neutral-400 hover:text-neutral-200'
+  }`;
 
-  const [temperature, setTemperature] = useState<'Ice' | 'Hot'>(
-    item.allowsTemperatureChoice ? 'Ice' : 'Ice'
+const priceTag = (c: CustomChoice) =>
+  Number(c.price) > 0 ? (
+    <span className="text-amber-400 font-semibold tabular-nums shrink-0">+{formatIDR(Number(c.price))}</span>
+  ) : null;
+
+export const VariantModal: React.FC<VariantModalProps> = ({ item, onClose, onAddToCart, initial, confirmLabel }) => {
+  const { rawMaterials, calculateRecipeCOGS, customization } = useApp();
+
+  const start = useMemo(
+    () =>
+      withDefaults(
+        item,
+        {
+          temperature: initial?.temperature,
+          size: initial?.size,
+          sugarLevel: initial?.sugarLevel,
+          milkType: initial?.milkType,
+          addons: initial?.addons,
+          notes: initial?.notes,
+        },
+        customization
+      ),
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+    []
   );
-  const [size, setSize] = useState<'Regular' | 'Large'>('Regular');
-  const [sugarLevel, setSugarLevel] = useState<'Normal' | 'Less Sugar' | 'No Sugar'>('Normal');
-  const [milkType, setMilkType] = useState<'Fresh Milk' | 'Oat Milk (+6k)' | 'Almond Milk (+6k)'>(
-    'Fresh Milk'
+
+  const [temperature, setTemperature] = useState<string | undefined>(start.temperature);
+  const [size, setSize] = useState<string | undefined>(start.size);
+  const [sugarLevel, setSugarLevel] = useState<string | undefined>(start.sugarLevel);
+  const [milkType, setMilkType] = useState<string | undefined>(start.milkType);
+  const [addons, setAddons] = useState<string[]>(start.addons || []);
+  const [notes, setNotes] = useState<string>(start.notes || '');
+
+  const toggleAddon = (label: string) =>
+    setAddons((prev) => (prev.includes(label) ? prev.filter((a) => a !== label) : [...prev, label]));
+
+  // Harga & HPP langsung, memakai rumus yang sama dengan keranjang
+  const live = computeLine(
+    item,
+    { temperature, size, sugarLevel, milkType, addons },
+    customization,
+    rawMaterials,
+    calculateRecipeCOGS(item.recipe)
   );
-  const [extraShot, setExtraShot] = useState<boolean>(false);
-  const [notes, setNotes] = useState<string>('');
-
-  // Calculate live dynamic price
-  let totalPrice = item.price;
-  if (size === 'Large') totalPrice += 4000;
-  if (milkType !== 'Fresh Milk') totalPrice += 6000;
-  if (extraShot) totalPrice += 5000;
-
-  // Calculate live estimated COGS (HPP)
-  const baseHPP = calculateRecipeCOGS(item.recipe);
-  let liveHPP = baseHPP;
-  if (size === 'Large') liveHPP *= 1.25;
-  if (milkType.includes('Oat Milk')) liveHPP += 2400;
-  if (extraShot) liveHPP += 18 * (rawMaterials.find((m) => m.id === 'mat-1')?.costPerUnit || 180);
+  const totalPrice = live.basePrice;
+  const liveHPP = live.calculatedCost;
+  const margin = totalPrice > 0 ? Math.round(((totalPrice - liveHPP) / totalPrice) * 100) : 0;
 
   const handleConfirm = () => {
     onAddToCart({
-      temperature: item.allowsTemperatureChoice ? temperature : undefined,
-      size: item.allowsSizeChoice ? size : undefined,
-      sugarLevel: item.allowsSugarLevel ? sugarLevel : undefined,
-      milkType: item.allowsMilkOptions ? milkType : undefined,
-      extraShot,
+      temperature,
+      size,
+      sugarLevel,
+      milkType,
+      addons: addons.length ? addons : undefined,
       notes: notes.trim() || undefined,
     });
     onClose();
   };
+
+  const renderGroup = (
+    title: string,
+    list: CustomChoice[],
+    value: string | undefined,
+    onPick: (label: string) => void,
+    cols: string
+  ) => (
+    <div>
+      <label className="block text-xs font-semibold text-neutral-300 uppercase tracking-wider mb-2">{title}</label>
+      <div className={`grid ${cols} gap-2`}>
+        {list.map((c) => (
+          <button key={c.id} type="button" onClick={() => onPick(c.label)} className={chip(value === c.label)}>
+            <span>{c.label}</span>
+            {priceTag(c)}
+          </button>
+        ))}
+      </div>
+    </div>
+  );
+
+  const colsFor = (n: number) => (n <= 2 ? 'grid-cols-2' : n === 3 ? 'grid-cols-3' : 'grid-cols-2');
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/75 backdrop-blur-xs p-4">
@@ -74,160 +125,47 @@ export const VariantModal: React.FC<VariantModalProps> = ({
           </button>
         </div>
 
-        {/* Body content */}
+        {/* Body */}
         <div className="px-6 py-4 overflow-y-auto space-y-5 text-sm">
-          {/* Temperature */}
-          {item.allowsTemperatureChoice && (
-            <div>
-              <label className="block text-xs font-semibold text-neutral-300 uppercase tracking-wider mb-2">
-                Suhu Penyajian
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setTemperature('Ice')}
-                  className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg border text-xs font-medium transition-colors ${
-                    temperature === 'Ice'
-                      ? 'bg-amber-600/20 border-amber-500 text-white'
-                      : 'bg-neutral-800/60 border-neutral-700 text-neutral-400 hover:text-neutral-200'
-                  }`}
-                >
-                  <Snowflake className="w-4 h-4 text-cyan-400" />
-                  <span>Dingin / Iced</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setTemperature('Hot')}
-                  className={`flex items-center justify-center gap-2 py-2.5 px-3 rounded-lg border text-xs font-medium transition-colors ${
-                    temperature === 'Hot'
-                      ? 'bg-amber-600/20 border-amber-500 text-white'
-                      : 'bg-neutral-800/60 border-neutral-700 text-neutral-400 hover:text-neutral-200'
-                  }`}
-                >
-                  <Flame className="w-4 h-4 text-orange-400" />
-                  <span>Panas / Hot</span>
-                </button>
-              </div>
-            </div>
-          )}
+          {item.allowsTemperatureChoice &&
+            renderGroup('Suhu Penyajian', customization.temperature, temperature, setTemperature, colsFor(customization.temperature.length))}
+          {item.allowsSizeChoice &&
+            renderGroup('Ukuran Cup (Size)', customization.size, size, setSize, colsFor(customization.size.length))}
+          {item.allowsSugarLevel &&
+            renderGroup('Tingkat Gula (Sugar Level)', customization.sugar, sugarLevel, setSugarLevel, colsFor(customization.sugar.length))}
+          {item.allowsMilkOptions &&
+            renderGroup('Pilihan Susu', customization.milk, milkType, setMilkType, 'grid-cols-1')}
 
-          {/* Size Choice */}
-          {item.allowsSizeChoice && (
+          {/* Add-on (boleh pilih lebih dari satu) */}
+          {customization.addons.length > 0 && (
             <div>
               <label className="block text-xs font-semibold text-neutral-300 uppercase tracking-wider mb-2">
-                Ukuran Cup (Size)
-              </label>
-              <div className="grid grid-cols-2 gap-2">
-                <button
-                  type="button"
-                  onClick={() => setSize('Regular')}
-                  className={`flex items-center justify-between py-2.5 px-4 rounded-lg border text-xs font-medium transition-colors ${
-                    size === 'Regular'
-                      ? 'bg-amber-600/20 border-amber-500 text-white'
-                      : 'bg-neutral-800/60 border-neutral-700 text-neutral-400 hover:text-neutral-200'
-                  }`}
-                >
-                  <span>Regular (16oz / 8oz)</span>
-                  <span className="text-neutral-400 text-[11px]">Standar</span>
-                </button>
-                <button
-                  type="button"
-                  onClick={() => setSize('Large')}
-                  className={`flex items-center justify-between py-2.5 px-4 rounded-lg border text-xs font-medium transition-colors ${
-                    size === 'Large'
-                      ? 'bg-amber-600/20 border-amber-500 text-white'
-                      : 'bg-neutral-800/60 border-neutral-700 text-neutral-400 hover:text-neutral-200'
-                  }`}
-                >
-                  <span>Large (20oz)</span>
-                  <span className="text-amber-400 font-semibold tabular-nums">+Rp 4.000</span>
-                </button>
-              </div>
-            </div>
-          )}
-
-          {/* Sugar Level */}
-          {item.allowsSugarLevel && (
-            <div>
-              <label className="block text-xs font-semibold text-neutral-300 uppercase tracking-wider mb-2">
-                Tingkat Gula (Sugar Level)
-              </label>
-              <div className="grid grid-cols-3 gap-2">
-                {(['Normal', 'Less Sugar', 'No Sugar'] as const).map((s) => (
-                  <button
-                    key={s}
-                    type="button"
-                    onClick={() => setSugarLevel(s)}
-                    className={`py-2 px-2 rounded-lg border text-xs font-medium transition-colors text-center ${
-                      sugarLevel === s
-                        ? 'bg-amber-600/20 border-amber-500 text-white'
-                        : 'bg-neutral-800/60 border-neutral-700 text-neutral-400 hover:text-neutral-200'
-                    }`}
-                  >
-                    {s}
-                  </button>
-                ))}
-              </div>
-            </div>
-          )}
-
-          {/* Milk Options */}
-          {item.allowsMilkOptions && (
-            <div>
-              <label className="block text-xs font-semibold text-neutral-300 uppercase tracking-wider mb-2">
-                Pilihan Susu (Dairy / Plant-Based)
+                Tambahan (Add-on)
               </label>
               <div className="space-y-1.5">
-                {(['Fresh Milk', 'Oat Milk (+6k)', 'Almond Milk (+6k)'] as const).map((m) => (
-                  <button
-                    key={m}
-                    type="button"
-                    onClick={() => setMilkType(m)}
-                    className={`w-full flex items-center justify-between py-2 px-3.5 rounded-lg border text-xs font-medium transition-colors ${
-                      milkType === m
-                        ? 'bg-amber-600/20 border-amber-500 text-white'
-                        : 'bg-neutral-800/60 border-neutral-700 text-neutral-400 hover:text-neutral-200'
-                    }`}
-                  >
-                    <span>{m === 'Fresh Milk' ? 'Fresh Milk UHT Greenfields (Standar)' : m}</span>
-                    {m !== 'Fresh Milk' && (
-                      <span className="text-amber-400 font-semibold tabular-nums">+Rp 6.000</span>
-                    )}
-                  </button>
-                ))}
+                {customization.addons.map((a) => {
+                  const on = addons.includes(a.label);
+                  return (
+                    <button key={a.id} type="button" onClick={() => toggleAddon(a.label)} className={`w-full ${chip(on)}`}>
+                      <div className="flex items-center gap-2">
+                        <div
+                          className={`w-4 h-4 rounded flex items-center justify-center ${
+                            on ? 'bg-amber-500 text-black' : 'border border-neutral-600'
+                          }`}
+                        >
+                          {on && <Check className="w-3 h-3 stroke-[3]" />}
+                        </div>
+                        <span>{a.label}</span>
+                      </div>
+                      {priceTag(a)}
+                    </button>
+                  );
+                })}
               </div>
             </div>
           )}
 
-          {/* Extra Addons */}
-          <div>
-            <label className="block text-xs font-semibold text-neutral-300 uppercase tracking-wider mb-2">
-              Tambahan (Add-on)
-            </label>
-            <button
-              type="button"
-              onClick={() => setExtraShot(!extraShot)}
-              className={`w-full flex items-center justify-between py-2 px-3.5 rounded-lg border text-xs font-medium transition-colors ${
-                extraShot
-                  ? 'bg-amber-600/20 border-amber-500 text-white'
-                  : 'bg-neutral-800/60 border-neutral-700 text-neutral-400 hover:text-neutral-200'
-              }`}
-            >
-              <div className="flex items-center gap-2">
-                <div
-                  className={`w-4 h-4 rounded flex items-center justify-center ${
-                    extraShot ? 'bg-amber-500 text-black' : 'border border-neutral-600'
-                  }`}
-                >
-                  {extraShot && <Check className="w-3 h-3 stroke-[3]" />}
-                </div>
-                <span>Extra Espresso Shot (+18g House Blend)</span>
-              </div>
-              <span className="text-amber-400 font-semibold tabular-nums">+Rp 5.000</span>
-            </button>
-          </div>
-
-          {/* Notes */}
+          {/* Catatan */}
           <div>
             <label className="block text-xs font-semibold text-neutral-300 uppercase tracking-wider mb-1.5">
               Catatan Khusus (Optional)
@@ -241,14 +179,12 @@ export const VariantModal: React.FC<VariantModalProps> = ({
             />
           </div>
 
-          {/* Live BOM calculation summary box */}
+          {/* Ringkasan HPP */}
           <div className="p-3 bg-neutral-950/70 border border-neutral-800 rounded-lg flex items-center justify-between text-xs">
             <span className="text-neutral-400">Estimasi HPP Bahan Baku:</span>
             <div className="text-right">
               <span className="text-neutral-300 font-mono tabular-nums">{formatIDR(Math.round(liveHPP))}</span>
-              <span className="text-[11px] text-emerald-400 ml-2">
-                (Margin ~{Math.round(((totalPrice - liveHPP) / totalPrice) * 100)}%)
-              </span>
+              <span className="text-[11px] text-emerald-400 ml-2">(Margin ~{margin}%)</span>
             </div>
           </div>
         </div>
@@ -257,9 +193,7 @@ export const VariantModal: React.FC<VariantModalProps> = ({
         <div className="px-6 py-4 border-t border-neutral-800 bg-neutral-900/80 flex items-center justify-between">
           <div>
             <span className="text-xs text-neutral-400 block">Total Harga</span>
-            <span className="text-lg font-bold text-amber-400 font-mono tabular-nums">
-              {formatIDR(totalPrice)}
-            </span>
+            <span className="text-lg font-bold text-amber-400 font-mono tabular-nums">{formatIDR(totalPrice)}</span>
           </div>
           <div className="flex items-center gap-2">
             <button
@@ -274,8 +208,8 @@ export const VariantModal: React.FC<VariantModalProps> = ({
               onClick={handleConfirm}
               className="flex items-center gap-1.5 px-5 py-2 text-xs font-semibold text-white bg-amber-600 hover:bg-amber-500 rounded-lg shadow-sm transition-colors"
             >
-              <Plus className="w-4 h-4" />
-              <span>Masukkan Pesanan</span>
+              {initial ? <Save className="w-4 h-4" /> : <Plus className="w-4 h-4" />}
+              <span>{confirmLabel || (initial ? 'Simpan Perubahan' : 'Masukkan Pesanan')}</span>
             </button>
           </div>
         </div>

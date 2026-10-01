@@ -14,6 +14,7 @@ export interface SyncState {
   transactions: Array<{ id: string }>;
   expenses: Array<{ id: string }>;
   stockMovements: Array<{ id: string }>;
+  debts: Array<{ id: string }>;
   storeSettings: unknown;
   currentShift: unknown;
   tombstones: string[];
@@ -26,6 +27,7 @@ const LIST_KEYS = [
   'transactions',
   'expenses',
   'stockMovements',
+  'debts',
 ] as const;
 
 export function emptySyncState(): SyncState {
@@ -36,6 +38,7 @@ export function emptySyncState(): SyncState {
     transactions: [],
     expenses: [],
     stockMovements: [],
+    debts: [],
     storeSettings: null,
     currentShift: null,
     tombstones: [],
@@ -63,13 +66,25 @@ export function isStateEmpty(s: SyncState): boolean {
 function unionById<T extends { id: string }>(
   preferred: T[],
   other: T[],
-  dead: Set<string>
+  dead: Set<string>,
+  combine?: (preferred: T, other: T) => T
 ): T[] {
   const map = new Map<string, T>();
-  // urutan: item "other" dulu, lalu preferred menimpa
+  // urutan: item "other" dulu, lalu preferred menimpa (atau digabung bila ada fungsi combine)
   for (const item of other) if (item && !dead.has(item.id)) map.set(item.id, item);
-  for (const item of preferred) if (item && !dead.has(item.id)) map.set(item.id, item);
+  for (const item of preferred) {
+    if (!item || dead.has(item.id)) continue;
+    const existing = map.get(item.id);
+    map.set(item.id, existing && combine ? combine(item, existing) : item);
+  }
   return Array.from(map.values());
+}
+
+/** Utang/piutang: bila kedua perangkat mencatat pembayaran di catatan yang sama, gabungkan per-ID pembayaran. */
+function combineDebt(p: { id: string }, o: { id: string }, dead: Set<string>): { id: string } {
+  const pp = (p as { payments?: Array<{ id: string }> }).payments || [];
+  const op = (o as { payments?: Array<{ id: string }> }).payments || [];
+  return { ...p, payments: unionById(pp, op, dead) } as { id: string };
 }
 
 /**
@@ -83,7 +98,8 @@ export function mergeStates(preferred: SyncState, other: SyncState): SyncState {
     (out as unknown as Record<string, unknown>)[k] = unionById(
       preferred[k] as Array<{ id: string }>,
       other[k] as Array<{ id: string }>,
-      dead
+      dead,
+      k === 'debts' ? (p, o) => combineDebt(p, o, dead) : undefined
     );
   }
   out.storeSettings = preferred.storeSettings ?? other.storeSettings;

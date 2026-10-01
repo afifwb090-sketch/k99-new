@@ -15,6 +15,7 @@ import { ShiftView } from './components/ShiftView';
 import { SettingsView } from './components/SettingsView';
 import { ExpenseModal } from './components/ExpenseModal';
 import { CustomerManagementView } from './components/CustomerManagementView';
+import { DebtsView } from './components/DebtsView';
 import { GoogleSheetsModal } from './components/GoogleSheetsModal';
 import { OfflineIndicator } from './components/OfflineIndicator';
 import { DownloadResourcesModal } from './components/DownloadResourcesModal';
@@ -77,6 +78,7 @@ function AppContent() {
         {activeTab === 'inventory' && <InventoryView />}
         {activeTab === 'recipes' && <RecipeBomView />}
         {activeTab === 'customers' && <CustomerManagementView />}
+        {activeTab === 'debts' && <DebtsView />}
         {activeTab === 'reports' && (
           <FinancialReportsView onOpenExpenseModal={() => setIsExpenseModalOpen(true)} />
         )}

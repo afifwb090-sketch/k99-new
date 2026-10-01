@@ -13,6 +13,7 @@ import {
   Users,
   Download,
   Cloud,
+  HandCoins,
 } from 'lucide-react';
 import { useApp } from '../context/AppContext';
 
@@ -21,6 +22,7 @@ export type ActiveTab =
   | 'inventory'
   | 'recipes'
   | 'customers'
+  | 'debts'
   | 'reports'
   | 'transactions'
   | 'shift'
@@ -48,6 +50,7 @@ export const Navbar: React.FC<NavbarProps> = ({
     { id: 'inventory', label: 'Bahan Baku & Stok', icon: Package },
     { id: 'recipes', label: 'Resep & BOM', icon: Coffee },
     { id: 'customers', label: 'Pelanggan & Poin', icon: Users },
+    { id: 'debts', label: 'Utang Piutang', icon: HandCoins },
     { id: 'reports', label: 'Laporan Keuangan', icon: FileSpreadsheet },
     { id: 'transactions', label: 'Riwayat Transaksi', icon: Receipt },
     { id: 'shift', label: 'Shift & Kas', icon: Clock },
@@ -79,7 +82,7 @@ export const Navbar: React.FC<NavbarProps> = ({
           </div>
 
           {/* Zone 2: Navigation Links */}
-          <nav className="hidden lg:flex items-center gap-1">
+          <nav className="hidden xl:flex items-center gap-1">
             {navItems.map((item) => {
               const Icon = item.icon;
               const isActive = activeTab === item.id;
@@ -182,7 +185,7 @@ export const Navbar: React.FC<NavbarProps> = ({
         </div>
 
         {/* Mobile Navigation bar for smaller screens */}
-        <div className="lg:hidden flex items-center gap-1 overflow-x-auto py-2 border-t border-neutral-800/80 no-scrollbar">
+        <div className="xl:hidden flex items-center gap-1 overflow-x-auto py-2 border-t border-neutral-800/80 no-scrollbar">
           {navItems.map((item) => {
             const Icon = item.icon;
             const isActive = activeTab === item.id;

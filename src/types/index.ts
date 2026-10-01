@@ -51,17 +51,41 @@ export interface MenuItem {
   allowsMilkOptions?: boolean;
 }
 
+export interface CustomChoice {
+  id: string;
+  label: string;
+  price: number; // tambahan harga jual (Rp)
+  cost: number; // tambahan HPP (Rp) di luar bahan baku terhubung
+  extraPercent?: number; // tambahan takaran resep (%) -> memengaruhi pemotongan stok & HPP
+  materialId?: string; // bahan baku yang ikut dipotong
+  materialQty?: number; // jumlah bahan yang dipotong per porsi
+}
+
+export type CustomGroupKey = 'temperature' | 'size' | 'sugar' | 'milk' | 'addons';
+
+export interface CustomizationConfig {
+  temperature: CustomChoice[];
+  size: CustomChoice[];
+  sugar: CustomChoice[];
+  milk: CustomChoice[];
+  addons: CustomChoice[];
+}
+
 export interface CartItem {
   id: string;
   menuItemId: string;
   name: string;
   basePrice: number;
   quantity: number;
-  temperature?: 'Ice' | 'Hot';
-  size?: 'Regular' | 'Large';
-  sugarLevel?: 'Normal' | 'Less Sugar' | 'No Sugar';
-  milkType?: 'Fresh Milk' | 'Oat Milk (+6k)' | 'Almond Milk (+6k)';
-  extraShot?: boolean;
+  // Pilihan kustomisasi disimpan sebagai label teks (bisa diubah di Pengaturan > Kustomisasi Kasir)
+  temperature?: string;
+  size?: string;
+  sugarLevel?: string;
+  milkType?: string;
+  addons?: string[];
+  extraShot?: boolean; // legacy (data lama)
+  recipeMultiplier?: number; // pengali takaran resep (mis. 1.25 untuk Large)
+  extraDeductions?: { rawMaterialId: string; quantity: number }[]; // bahan tambahan yang dipotong per 1 porsi
   notes?: string;
   itemTotal: number;
   calculatedCost: number; // HPP per item configuration
@@ -196,4 +220,32 @@ export interface StoreSettings {
   receiptFooter: string;
   pointsPerAmount: number; // e.g., 1 point per 10,000 IDR
   redemptionRate: number; // e.g., 1 point = 1,000 IDR discount
+  customization?: CustomizationConfig; // pilihan kustomisasi kasir (opsional, ada nilai bawaan)
+}
+
+// ---------------------------------------------------------------------------
+// Utang & Piutang (mis. bahan baku yang dipesan tempo dari supplier)
+// ---------------------------------------------------------------------------
+export type DebtKind = 'UTANG' | 'PIUTANG'; // UTANG = kita berutang ke pihak lain; PIUTANG = pihak lain berutang ke kita
+
+export interface DebtPayment {
+  id: string;
+  date: string; // YYYY-MM-DD
+  amount: number;
+  method: 'Kas Tunai' | 'Rekening Bank';
+  notes?: string;
+}
+
+export interface DebtRecord {
+  id: string;
+  kind: DebtKind;
+  party: string; // nama supplier / pihak terkait
+  description: string; // mis. "Kopi Arabika 5 kg"
+  totalAmount: number;
+  date: string; // tanggal transaksi
+  dueDate?: string; // jatuh tempo (opsional)
+  payments: DebtPayment[];
+  notes?: string;
+  materialId?: string; // bahan baku terkait (bila berasal dari restock)
+  timestamp: string;
 }

@@ -1,3 +1,4 @@
+import type { CustomizationConfig } from '../types';
 import React, { createContext, useContext, useState, useEffect, useMemo, useRef, useCallback, ReactNode } from 'react';
 import {
   RawMaterial,
@@ -13,6 +14,9 @@ import {
   Customer,
   SalesChannel,
   OnlinePlatform,
+  DebtRecord,
+  DebtKind,
+  DebtPayment,
 } from '../types';
 import {
   initialRawMaterials,
@@ -27,6 +31,7 @@ import {
 } from '../data/initialData';
 import { generateId } from '../utils/formatters';
 import { googleSheetsService } from '../services/googleSheetsService';
+import { buildDefaultCustomization, normalizeCustomization, computeLine, withDefaults, type CustomSelection } from '../utils/customization';
 import { pullState, pushState, loadSyncMeta, saveSyncMeta } from '../services/cloudSyncService';
 import { type SyncState, stateHash } from '../services/syncMerge';
 import { runSyncCycle } from '../services/syncEngine';
@@ -76,6 +81,9 @@ interface AppContextType {
 
   // Cart Actions
   addToCart: (item: MenuItem, customization?: Partial<CartItem>) => void;
+  updateCartItem: (cartItemId: string, item: MenuItem, customization: Partial<CartItem>) => void;
+  customization: CustomizationConfig;
+  updateCustomization: (cfg: CustomizationConfig) => void;
   updateCartQuantity: (cartItemId: string, delta: number) => void;
   removeFromCart: (cartItemId: string) => void;
   clearCart: () => void;
@@ -113,6 +121,8 @@ interface AppContextType {
     notes?: string;
     autoRecordExpense?: boolean;
     paymentMethod?: 'Kas Tunai' | 'Rekening Bank';
+    onCredit?: boolean; // beli tempo: dicatat sebagai utang supplier, bukan pengeluaran
+    dueDate?: string;
   }) => void;
   adjustMaterialStock: (
     materialId: string,
@@ -133,6 +143,26 @@ interface AppContextType {
   // Expenses & Cash
   addExpense: (expense: Omit<Expense, 'id' | 'timestamp'>) => void;
   deleteExpense: (id: string) => void;
+
+  // Utang & Piutang (mis. bahan baku pesan tempo)
+  debts: DebtRecord[];
+  addDebt: (data: {
+    kind: DebtKind;
+    party: string;
+    description: string;
+    totalAmount: number;
+    date: string;
+    dueDate?: string;
+    notes?: string;
+    materialId?: string;
+  }) => string;
+  updateDebt: (debt: DebtRecord) => void;
+  deleteDebt: (id: string) => void;
+  addDebtPayment: (
+    debtId: string,
+    payment: { amount: number; date: string; method: 'Kas Tunai' | 'Rekening Bank'; notes?: string; recordAsExpense?: boolean }
+  ) => void;
+  deleteDebtPayment: (debtId: string, paymentId: string) => void;
 
   // Shift Management
   openShift: (cashierName: string, initialCash: number) => void;
@@ -202,6 +232,15 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     return saved ? JSON.parse(saved) : [];
   });
 
+  const [debts, setDebts] = useState<DebtRecord[]>(() => {
+    try {
+      const saved = localStorage.getItem(`${STORAGE_KEY}_debts`);
+      return saved ? JSON.parse(saved) : [];
+    } catch {
+      return [];
+    }
+  });
+
   // Penanda item yang sudah dihapus (agar tidak "hidup lagi" saat digabung dengan perangkat lain)
   const [tombstones, setTombstones] = useState<string[]>(() => {
     try {
@@ -254,6 +293,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     localStorage.setItem(`${STORAGE_KEY}_customers`, JSON.stringify(customers));
   }, [customers]);
 
+  useEffect(() => {
+    localStorage.setItem(`${STORAGE_KEY}_debts`, JSON.stringify(debts));
+  }, [debts]);
+
   // Helper: Calculate Recipe COGS
   const calculateRecipeCOGS = (recipe: RecipeItem[]): number => {
     return recipe.reduce((acc, item) => {
@@ -269,34 +312,76 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   }, [rawMaterials]);
 
   // Cart operations
-  const addToCart = (item: MenuItem, customization?: Partial<CartItem>) => {
-    let price = item.price;
-    if (customization?.size === 'Large') price += 4000;
-    if (customization?.milkType?.includes('+6k')) price += 6000;
-    if (customization?.extraShot) price += 5000;
+  // Pilihan kustomisasi kasir (bisa diubah di Pengaturan). Ada nilai bawaan bila belum pernah diubah.
+  const customization = useMemo(() => normalizeCustomization(storeSettings.customization), [storeSettings.customization]);
 
-    let itemHPP = calculateRecipeCOGS(item.recipe);
-    if (customization?.extraShot) itemHPP += 18 * (rawMaterials.find((m) => m.id === 'mat-1')?.costPerUnit || 180);
-    if (customization?.size === 'Large') itemHPP *= 1.25;
+  const updateCustomization = (cfg: CustomizationConfig) => {
+    setStoreSettings((prev) => ({ ...prev, customization: cfg }));
+  };
 
-    const cartId = generateId('CART');
+  const buildCartLine = (item: MenuItem, custom?: Partial<CartItem>) => {
+    const sel: CustomSelection = withDefaults(
+      item,
+      {
+        temperature: custom?.temperature,
+        size: custom?.size,
+        sugarLevel: custom?.sugarLevel,
+        milkType: custom?.milkType,
+        addons: custom?.addons,
+        notes: custom?.notes,
+      },
+      customization
+    );
+    const calc = computeLine(item, sel, customization, rawMaterials, calculateRecipeCOGS(item.recipe));
+    return { sel, calc };
+  };
+
+  const addToCart = (item: MenuItem, custom?: Partial<CartItem>) => {
+    const { sel, calc } = buildCartLine(item, custom);
     const newCartItem: CartItem = {
-      id: cartId,
+      id: generateId('CART'),
       menuItemId: item.id,
       name: item.name,
-      basePrice: price,
+      basePrice: calc.basePrice,
       quantity: 1,
-      temperature: customization?.temperature || (item.allowsTemperatureChoice ? 'Ice' : undefined),
-      size: customization?.size || (item.allowsSizeChoice ? 'Regular' : undefined),
-      sugarLevel: customization?.sugarLevel || (item.allowsSugarLevel ? 'Normal' : undefined),
-      milkType: customization?.milkType || (item.allowsMilkOptions ? 'Fresh Milk' : undefined),
-      extraShot: customization?.extraShot || false,
-      notes: customization?.notes || '',
-      itemTotal: price,
-      calculatedCost: Math.round(itemHPP),
+      temperature: sel.temperature,
+      size: sel.size,
+      sugarLevel: sel.sugarLevel,
+      milkType: sel.milkType,
+      addons: sel.addons && sel.addons.length ? sel.addons : undefined,
+      recipeMultiplier: calc.recipeMultiplier,
+      extraDeductions: calc.extraDeductions.length ? calc.extraDeductions : undefined,
+      notes: sel.notes || '',
+      itemTotal: calc.basePrice,
+      calculatedCost: calc.calculatedCost,
     };
-
     setCart((prev) => [...prev, newCartItem]);
+  };
+
+  // Ubah pilihan kustomisasi item yang sudah ada di keranjang (jumlah porsi tetap)
+  const updateCartItem = (cartItemId: string, item: MenuItem, custom: Partial<CartItem>) => {
+    const { sel, calc } = buildCartLine(item, custom);
+    setCart((prev) =>
+      prev.map((c) =>
+        c.id === cartItemId
+          ? {
+              ...c,
+              basePrice: calc.basePrice,
+              temperature: sel.temperature,
+              size: sel.size,
+              sugarLevel: sel.sugarLevel,
+              milkType: sel.milkType,
+              addons: sel.addons && sel.addons.length ? sel.addons : undefined,
+              extraShot: undefined,
+              recipeMultiplier: calc.recipeMultiplier,
+              extraDeductions: calc.extraDeductions.length ? calc.extraDeductions : undefined,
+              notes: sel.notes || '',
+              itemTotal: calc.basePrice * c.quantity,
+              calculatedCost: calc.calculatedCost,
+            }
+          : c
+      )
+    );
   };
 
   const updateCartQuantity = (cartItemId: string, delta: number) => {
@@ -426,22 +511,13 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       const menu = menuItems.find((m) => m.id === cartItem.menuItemId);
       if (menu) {
         menu.recipe.forEach((rec) => {
-          let qty = rec.quantity * cartItem.quantity;
-          if (cartItem.size === 'Large') qty *= 1.25;
+          const qty = rec.quantity * cartItem.quantity * (cartItem.recipeMultiplier || 1);
           deductionMap[rec.rawMaterialId] = (deductionMap[rec.rawMaterialId] || 0) + qty;
         });
 
-        if (cartItem.extraShot) {
-          deductionMap['mat-1'] = (deductionMap['mat-1'] || 0) + 18 * cartItem.quantity;
-        }
-
-        if (cartItem.milkType?.includes('Oat Milk')) {
-          const freshMilkQty = deductionMap['mat-3'] || 0;
-          if (freshMilkQty > 0) {
-            deductionMap['mat-3'] = Math.max(0, freshMilkQty - 120 * cartItem.quantity);
-            deductionMap['mat-4'] = (deductionMap['mat-4'] || 0) + 120 * cartItem.quantity;
-          }
-        }
+        (cartItem.extraDeductions || []).forEach((ex) => {
+          deductionMap[ex.rawMaterialId] = (deductionMap[ex.rawMaterialId] || 0) + ex.quantity * cartItem.quantity;
+        });
       }
     });
 
@@ -644,6 +720,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     notes,
     autoRecordExpense = true,
     paymentMethod = 'Kas Tunai',
+    onCredit = false,
+    dueDate,
   }: {
     materialId: string;
     quantityToAdd: number;
@@ -652,6 +730,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     notes?: string;
     autoRecordExpense?: boolean;
     paymentMethod?: 'Kas Tunai' | 'Rekening Bank';
+    onCredit?: boolean;
+    dueDate?: string;
   }) => {
     const now = new Date();
     const timestamp = now.toISOString();
@@ -697,7 +777,18 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       ...prev,
     ]);
 
-    if (autoRecordExpense && totalCost > 0) {
+    if (onCredit && totalCost > 0) {
+      // Beli tempo: belum ada uang keluar -> catat sebagai utang; pengeluaran dicatat saat dibayar
+      addDebt({
+        kind: 'UTANG',
+        party: supplier || mat.supplier || 'Supplier',
+        description: `Beli ${mat.name} (${quantityToAdd} ${mat.unit})${notes ? ` · ${notes}` : ''}`,
+        totalAmount: totalCost,
+        date,
+        dueDate: dueDate || undefined,
+        materialId: mat.id,
+      });
+    } else if (autoRecordExpense && totalCost > 0) {
       addExpense({
         category: 'Pembelian Bahan Baku',
         description: `Beli ${mat.name} (${quantityToAdd} ${mat.unit}) dari ${supplier}`,
@@ -801,6 +892,80 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     });
   };
 
+  // --- Utang & Piutang -----------------------------------------------------
+  const addDebt: AppContextType['addDebt'] = (data) => {
+    const id = generateId('DEBT');
+    const rec: DebtRecord = {
+      id,
+      kind: data.kind,
+      party: data.party.trim() || (data.kind === 'UTANG' ? 'Supplier' : 'Pelanggan'),
+      description: data.description.trim(),
+      totalAmount: Math.max(0, Number(data.totalAmount) || 0),
+      date: data.date,
+      dueDate: data.dueDate || undefined,
+      payments: [],
+      notes: data.notes?.trim() || undefined,
+      materialId: data.materialId,
+      timestamp: new Date().toISOString(),
+    };
+    setDebts((prev) => [rec, ...prev]);
+    return id;
+  };
+
+  const updateDebt = (debt: DebtRecord) => {
+    setDebts((prev) => prev.map((d) => (d.id === debt.id ? debt : d)));
+  };
+
+  const deleteDebt = (id: string) => {
+    const target = debts.find((d) => d.id === id);
+    if (target) {
+      // ikut hapus pengeluaran yang dibuat dari pembayaran utang ini & tandai pembayaran terhapus
+      const payIds = target.payments.map((p) => p.id);
+      payIds.forEach((pid) => addTombstone(pid));
+      expenses.filter((e) => e.receiptNumber && payIds.some((pid) => e.receiptNumber === `DEBTPAY-${pid}`)).forEach((e) => deleteExpense(e.id));
+    }
+    addTombstone(id);
+    setDebts((prev) => prev.filter((d) => d.id !== id));
+  };
+
+  const addDebtPayment: AppContextType['addDebtPayment'] = (debtId, pay) => {
+    const debt = debts.find((d) => d.id === debtId);
+    if (!debt) return;
+    const paid = debt.payments.reduce((s, p) => s + p.amount, 0);
+    const remaining = Math.max(0, debt.totalAmount - paid);
+    const amount = Math.min(Math.max(0, Number(pay.amount) || 0), remaining);
+    if (amount <= 0) return;
+
+    const payment: DebtPayment = {
+      id: generateId('PAY'),
+      date: pay.date,
+      amount,
+      method: pay.method,
+      notes: pay.notes?.trim() || undefined,
+    };
+    setDebts((prev) => prev.map((d) => (d.id === debtId ? { ...d, payments: [...d.payments, payment] } : d)));
+
+    // Membayar utang = uang keluar -> masuk Laporan Keuangan (hanya untuk UTANG)
+    if (debt.kind === 'UTANG' && pay.recordAsExpense !== false) {
+      addExpense({
+        category: debt.materialId ? 'Pembelian Bahan Baku' : 'Operasional Lainnya',
+        description: `Bayar utang ke ${debt.party}: ${debt.description}`,
+        amount,
+        date: pay.date,
+        paymentMethod: pay.method,
+        receiptNumber: `DEBTPAY-${payment.id}`,
+      });
+    }
+  };
+
+  const deleteDebtPayment: AppContextType['deleteDebtPayment'] = (debtId, paymentId) => {
+    addTombstone(paymentId);
+    setDebts((prev) =>
+      prev.map((d) => (d.id === debtId ? { ...d, payments: d.payments.filter((p) => p.id !== paymentId) } : d))
+    );
+    expenses.filter((e) => e.receiptNumber === `DEBTPAY-${paymentId}`).forEach((e) => deleteExpense(e.id));
+  };
+
   const deleteExpense = (id: string) => {
     addTombstone(id);
     setExpenses((prev) => prev.filter((e) => e.id !== id));
@@ -838,7 +1003,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   };
 
   const updateSettings = (settings: StoreSettings) => {
-    setStoreSettings(settings);
+    // kustomisasi kasir diatur terpisah; jangan tertimpa salinan lama dari form pengaturan
+    setStoreSettings((prev) => ({ ...settings, customization: prev.customization }));
   };
 
   const resetToInitialData = () => {
@@ -851,6 +1017,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     localStorage.removeItem(`${STORAGE_KEY}_shift`);
     localStorage.removeItem(`${STORAGE_KEY}_settings`);
     localStorage.removeItem(`${STORAGE_KEY}_customers`);
+    localStorage.removeItem(`${STORAGE_KEY}_debts`);
 
     setRawMaterials(initialRawMaterials);
     setMenuItems(initialMenuItems);
@@ -861,6 +1028,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setCurrentShift(initialShift);
     setStoreSettings(initialStoreSettings);
     setCustomers(initialCustomers);
+    setDebts([]);
     setTombstones([]);
   };
 
@@ -877,8 +1045,10 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       ...transactions,
       ...expenses,
       ...stockMovements,
+      ...debts,
     ].map((x) => x.id);
-    setTombstones((prev) => Array.from(new Set([...prev, ...allIds])));
+    const payIds = debts.flatMap((d) => d.payments.map((p) => p.id));
+    setTombstones((prev) => Array.from(new Set([...prev, ...allIds, ...payIds])));
 
     setRawMaterials([]);
     setMenuItems([]);
@@ -892,6 +1062,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       date: new Date().toISOString().slice(0, 10),
     });
     setCustomers([]);
+    setDebts([]);
   };
 
   // ---------------------------------------------------------------------------
@@ -917,6 +1088,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     transactions,
     expenses,
     stockMovements,
+    debts,
     storeSettings,
     currentShift,
     tombstones,
@@ -935,6 +1107,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setTransactions(st.transactions as Transaction[]);
     setExpenses(st.expenses as Expense[]);
     setStockMovements(st.stockMovements as StockMovement[]);
+    setDebts((st.debts || []) as DebtRecord[]);
     if (st.storeSettings) setStoreSettings(st.storeSettings as StoreSettings);
     if (st.currentShift) setCurrentShift(st.currentShift as Shift);
     setTombstones(st.tombstones);
@@ -994,7 +1167,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
       void syncNow();
     }, 2500);
     return () => clearTimeout(t);
-  }, [rawMaterials, menuItems, customers, transactions, expenses, stockMovements, storeSettings, currentShift, tombstones, syncNow]);
+  }, [rawMaterials, menuItems, customers, transactions, expenses, stockMovements, debts, storeSettings, currentShift, tombstones, syncNow]);
 
   // 2) Saat dibuka, saat kembali ke tab/aplikasi, saat online lagi, dan tiap 60 detik
   useEffect(() => {
@@ -1118,6 +1291,9 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         storeSettings,
         customers,
         addToCart,
+        updateCartItem,
+        customization,
+        updateCustomization,
         updateCartQuantity,
         removeFromCart,
         clearCart,
@@ -1138,6 +1314,12 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         updateMenuRecipe,
         addExpense,
         deleteExpense,
+        debts,
+        addDebt,
+        updateDebt,
+        deleteDebt,
+        addDebtPayment,
+        deleteDebtPayment,
         openShift,
         closeShift,
         updateSettings,

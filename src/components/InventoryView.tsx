@@ -29,6 +29,7 @@ export const InventoryView: React.FC = () => {
     addRawMaterial,
     updateRawMaterial,
     deleteRawMaterial,
+    addDebt,
     menuItems,
     updateMenuRecipe,
     lowStockItems,
@@ -46,6 +47,8 @@ export const InventoryView: React.FC = () => {
   const [restockNotes, setRestockNotes] = useState<string>('');
   const [restockAutoExpense, setRestockAutoExpense] = useState<boolean>(true);
   const [restockPaymentMethod, setRestockPaymentMethod] = useState<'Kas Tunai' | 'Rekening Bank'>('Kas Tunai');
+  const [restockOnCredit, setRestockOnCredit] = useState<boolean>(false);
+  const [restockDueDate, setRestockDueDate] = useState<string>('');
 
   // Stock Adjustment modal state
   const [adjustItem, setAdjustItem] = useState<RawMaterial | null>(null);
@@ -78,6 +81,8 @@ export const InventoryView: React.FC = () => {
   const [editCalcQty, setEditCalcQty] = useState<string>('');
   const [deleteItem, setDeleteItem] = useState<RawMaterial | null>(null);
   const [newMatSupplier, setNewMatSupplier] = useState<string>('');
+  const [newMatOnCredit, setNewMatOnCredit] = useState<boolean>(false);
+  const [newMatDueDate, setNewMatDueDate] = useState<string>('');
 
   const categories = [
     'Semua',
@@ -130,8 +135,12 @@ export const InventoryView: React.FC = () => {
       notes: restockNotes,
       autoRecordExpense: restockAutoExpense,
       paymentMethod: restockPaymentMethod,
+      onCredit: restockOnCredit,
+      dueDate: restockDueDate || undefined,
     });
 
+    setRestockOnCredit(false);
+    setRestockDueDate('');
     setRestockItem(null);
     setRestockQty(0);
     setRestockTotalCost(0);
@@ -224,6 +233,19 @@ export const InventoryView: React.FC = () => {
       supplier: newMatSupplier.trim() || 'Supplier Lokal',
     });
 
+    if (newMatOnCredit && Number(newMatPrice) > 0) {
+      addDebt({
+        kind: 'UTANG',
+        party: newMatSupplier.trim() || 'Supplier Lokal',
+        description: `Beli ${newMatName.trim()} (${newMatStock} ${newMatUnit})`,
+        totalAmount: Number(newMatPrice),
+        date: new Date().toISOString().split('T')[0],
+        dueDate: newMatDueDate || undefined,
+      });
+    }
+
+    setNewMatOnCredit(false);
+    setNewMatDueDate('');
     setIsAddModalOpen(false);
     setNewMatName('');
     setNewMatSku('');
@@ -674,7 +696,35 @@ export const InventoryView: React.FC = () => {
                 />
               </div>
 
+              {/* Beli tempo (utang supplier) */}
+              <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-lg space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={restockOnCredit}
+                    onChange={(e) => setRestockOnCredit(e.target.checked)}
+                    className="rounded text-amber-600 focus:ring-amber-500"
+                  />
+                  <span className="font-semibold text-white">Beli tempo (belum dibayar) → catat sebagai Utang Supplier</span>
+                </label>
+                {restockOnCredit && (
+                  <div className="pl-6 space-y-1 text-[11px] text-neutral-400">
+                    <div className="flex items-center gap-2">
+                      <span>Jatuh tempo (opsional):</span>
+                      <input
+                        type="date"
+                        value={restockDueDate}
+                        onChange={(e) => setRestockDueDate(e.target.value)}
+                        className="bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-white focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+                    <p>Stok langsung bertambah. Uang keluar baru masuk Laporan Keuangan saat utang dibayar (menu Utang Piutang).</p>
+                  </div>
+                )}
+              </div>
+
               {/* Automatic accounting expense integration checkbox */}
+              {!restockOnCredit && (
               <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-lg space-y-2">
                 <label className="flex items-center gap-2 cursor-pointer">
                   <input
@@ -712,6 +762,7 @@ export const InventoryView: React.FC = () => {
                   </div>
                 )}
               </div>
+              )}
 
               <div className="pt-3 border-t border-neutral-800 flex justify-end gap-2">
                 <button
@@ -969,6 +1020,34 @@ export const InventoryView: React.FC = () => {
                   placeholder="Nama distributor atau pemasok"
                   className="w-full bg-neutral-950 border border-neutral-700 rounded-lg px-3 py-2 text-white focus:outline-none focus:border-amber-500"
                 />
+              </div>
+
+              <div className="p-3 bg-neutral-950 border border-neutral-800 rounded-lg space-y-2">
+                <label className="flex items-center gap-2 cursor-pointer">
+                  <input
+                    type="checkbox"
+                    checked={newMatOnCredit}
+                    onChange={(e) => setNewMatOnCredit(e.target.checked)}
+                    className="rounded text-amber-600 focus:ring-amber-500"
+                  />
+                  <span className="font-semibold text-white">Beli tempo (belum dibayar) → catat sebagai Utang Supplier</span>
+                </label>
+                {newMatOnCredit && (
+                  <div className="pl-6 space-y-1 text-[11px] text-neutral-400">
+                    <div className="flex items-center gap-2">
+                      <span>Jatuh tempo (opsional):</span>
+                      <input
+                        type="date"
+                        value={newMatDueDate}
+                        onChange={(e) => setNewMatDueDate(e.target.value)}
+                        className="bg-neutral-900 border border-neutral-700 rounded px-2 py-1 text-white focus:outline-none focus:border-amber-500"
+                      />
+                    </div>
+                    {!(Number(newMatPrice) > 0) && (
+                      <p className="text-amber-400">Isi "Harga Beli Total" agar nilai utang tercatat.</p>
+                    )}
+                  </div>
+                )}
               </div>
 
               <div className="pt-3 border-t border-neutral-800 flex justify-end gap-2">

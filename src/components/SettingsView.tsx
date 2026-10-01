@@ -23,6 +23,7 @@ import { useApp } from '../context/AppContext';
 import { StoreSettings, MenuItem, MenuCategory } from '../types';
 import { formatIDR } from '../utils/formatters';
 import { usePWAInstall } from '../utils/usePWAInstall';
+import { CustomizationEditor } from './CustomizationEditor';
 
 interface SettingsViewProps {
   onOpenDownloadModal?: () => void;
@@ -38,6 +39,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
     updateSettings,
     resetToInitialData,
     clearAllData,
+    updateMenuItem,
     menuItems,
     addMenuItem,
     deleteMenuItem,
@@ -263,6 +265,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
             </div>
           </form>
 
+          {/* Editor pilihan kustomisasi kasir */}
+          <CustomizationEditor />
+
           {/* Backup & System Reset Card */}
           <div className="bg-neutral-900 border border-neutral-800 rounded-xl p-6 space-y-4 text-xs">
             <h3 className="font-bold text-white text-sm">Cadangan Data & Reset Sistem</h3>
@@ -452,8 +457,9 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
               {menuItems.map((item) => (
                 <div
                   key={item.id}
-                  className="p-3 bg-neutral-950 border border-neutral-800/80 rounded-lg flex items-center justify-between text-xs"
+                  className="p-3 bg-neutral-950 border border-neutral-800/80 rounded-lg space-y-2 text-xs"
                 >
+                  <div className="flex items-center justify-between">
                   <div className="space-y-0.5">
                     <span className="font-semibold text-white block">{item.name}</span>
                     <span className="text-[11px] text-neutral-400">
@@ -474,6 +480,35 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                     >
                       <Trash2 className="w-3.5 h-3.5" />
                     </button>
+                  </div>
+                  </div>
+
+                  {/* Opsi kustomisasi per menu (bisa diubah kapan saja) */}
+                  <div className="flex flex-wrap gap-1.5">
+                    {([
+                      ['allowsTemperatureChoice', 'Suhu'],
+                      ['allowsSizeChoice', 'Size'],
+                      ['allowsSugarLevel', 'Gula'],
+                      ['allowsMilkOptions', 'Susu'],
+                    ] as const).map(([field, label]) => {
+                      const on = !!item[field];
+                      return (
+                        <button
+                          key={field}
+                          type="button"
+                          onClick={() => updateMenuItem({ ...item, [field]: !on })}
+                          title={`${on ? 'Matikan' : 'Aktifkan'} pilihan ${label} untuk menu ini`}
+                          className={`px-2 py-0.5 text-[10px] font-semibold rounded border transition-colors ${
+                            on
+                              ? 'bg-amber-600/20 border-amber-500/60 text-amber-300'
+                              : 'bg-neutral-900 border-neutral-700 text-neutral-500 hover:text-neutral-300'
+                          }`}
+                        >
+                          {on ? '✓ ' : ''}
+                          {label}
+                        </button>
+                      );
+                    })}
                   </div>
                 </div>
               ))}
@@ -550,7 +585,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       onChange={(e) => setMenuAllowsTemp(e.target.checked)}
                       className="rounded text-amber-600"
                     />
-                    <span>Pilihan Hot/Ice</span>
+                    <span>Pilihan Suhu (Hot/Ice)</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -559,7 +594,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       onChange={(e) => setMenuAllowsSize(e.target.checked)}
                       className="rounded text-amber-600"
                     />
-                    <span>Pilihan Size (Regular/Large)</span>
+                    <span>Pilihan Size</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -568,7 +603,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       onChange={(e) => setMenuAllowsSugar(e.target.checked)}
                       className="rounded text-amber-600"
                     />
-                    <span>Sugar Level (Less/Normal)</span>
+                    <span>Sugar Level</span>
                   </label>
                   <label className="flex items-center gap-2 cursor-pointer">
                     <input
@@ -577,7 +612,7 @@ export const SettingsView: React.FC<SettingsViewProps> = ({
                       onChange={(e) => setMenuAllowsMilk(e.target.checked)}
                       className="rounded text-amber-600"
                     />
-                    <span>Pilihan Susu (Oat/Almond)</span>
+                    <span>Pilihan Susu</span>
                   </label>
                 </div>
               </div>

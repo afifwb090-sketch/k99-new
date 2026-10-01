@@ -71,8 +71,7 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
       const menu = menuItems.find((m) => m.id === cartItem.menuItemId);
       if (menu) {
         menu.recipe.forEach((rec) => {
-          let q = rec.quantity * cartItem.quantity;
-          if (cartItem.size === 'Large') q *= 1.25;
+          const q = rec.quantity * cartItem.quantity * (cartItem.recipeMultiplier || 1);
           const mat = rawMaterials.find((m) => m.id === rec.rawMaterialId);
           if (mat) {
             if (!map[mat.id]) {
@@ -82,15 +81,15 @@ export const CheckoutModal: React.FC<CheckoutModalProps> = ({
           }
         });
 
-        if (cartItem.extraShot) {
-          const mat1 = rawMaterials.find((m) => m.id === 'mat-1');
-          if (mat1) {
-            if (!map['mat-1']) {
-              map['mat-1'] = { name: mat1.name, qty: 0, unit: mat1.unit };
+        (cartItem.extraDeductions || []).forEach((ex) => {
+          const mat = rawMaterials.find((m) => m.id === ex.rawMaterialId);
+          if (mat) {
+            if (!map[mat.id]) {
+              map[mat.id] = { name: mat.name, qty: 0, unit: mat.unit };
             }
-            map['mat-1'].qty += 18 * cartItem.quantity;
+            map[mat.id].qty += ex.quantity * cartItem.quantity;
           }
-        }
+        });
       }
     });
 

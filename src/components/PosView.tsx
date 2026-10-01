@@ -19,10 +19,12 @@ import {
   CheckCircle2,
   DollarSign,
   Tag,
+  Pencil,
 } from 'lucide-react';
 import { MenuItem, CartItem, Transaction, SalesChannel, OnlinePlatform, Customer } from '../types';
 import { useApp } from '../context/AppContext';
 import { formatIDR } from '../utils/formatters';
+import { describeCartItem } from '../utils/customization';
 import { VariantModal } from './VariantModal';
 import { CheckoutModal } from './CheckoutModal';
 import { ReceiptModal } from './ReceiptModal';
@@ -33,6 +35,8 @@ export const PosView: React.FC = () => {
     rawMaterials,
     cart,
     addToCart,
+    updateCartItem,
+    customization,
     updateCartQuantity,
     removeFromCart,
     clearCart,
@@ -52,6 +56,8 @@ export const PosView: React.FC = () => {
   const [selectedCategory, setSelectedCategory] = useState<string>('Semua');
   const [searchQuery, setSearchQuery] = useState<string>('');
   const [selectedItemForVariant, setSelectedItemForVariant] = useState<MenuItem | null>(null);
+  // Item di keranjang yang sedang diedit pilihannya (suhu, size, gula, susu, add-on, catatan)
+  const [editingCartItem, setEditingCartItem] = useState<CartItem | null>(null);
 
   // Offline Customer & Loyalty State (NO TABLE NUMBER)
   const [orderType, setOrderType] = useState<'Dine In' | 'Take Away'>('Dine In');
@@ -706,26 +712,33 @@ export const PosView: React.FC = () => {
                   </div>
 
                   {/* Modifiers List */}
-                  {(item.temperature || item.size || item.milkType || item.extraShot || item.notes) && (
-                    <div className="text-[10px] text-neutral-400 space-x-1">
-                      {item.temperature && <span>{item.temperature}</span>}
-                      {item.size && item.size !== 'Regular' && <span>· {item.size}</span>}
-                      {item.sugarLevel && item.sugarLevel !== 'Normal' && <span>· {item.sugarLevel}</span>}
-                      {item.milkType && item.milkType !== 'Fresh Milk' && <span>· {item.milkType}</span>}
-                      {item.extraShot && <span className="text-amber-400">· +Shot</span>}
+                  {(describeCartItem(item, customization).length > 0 || item.notes) && (
+                    <div className="text-[10px] text-neutral-400">
+                      {describeCartItem(item, customization).join(' · ')}
                       {item.notes && <span className="italic block text-neutral-500">"{item.notes}"</span>}
                     </div>
                   )}
 
                   {/* Quantity & Remove controls */}
                   <div className="flex items-center justify-between pt-1 border-t border-neutral-800/60">
-                    <button
-                      onClick={() => removeFromCart(item.id)}
-                      className="text-neutral-500 hover:text-red-400 p-1 transition-colors"
-                      title="Hapus"
-                    >
-                      <Trash2 className="w-3.5 h-3.5" />
-                    </button>
+                    <div className="flex items-center gap-1">
+                      <button
+                        onClick={() => removeFromCart(item.id)}
+                        className="text-neutral-500 hover:text-red-400 p-1 transition-colors"
+                        title="Hapus"
+                      >
+                        <Trash2 className="w-3.5 h-3.5" />
+                      </button>
+                      {menuItems.some((m) => m.id === item.menuItemId) && (
+                        <button
+                          onClick={() => setEditingCartItem(item)}
+                          className="text-neutral-500 hover:text-sky-300 p-1 transition-colors"
+                          title="Ubah pilihan (suhu, size, gula, susu, add-on)"
+                        >
+                          <Pencil className="w-3.5 h-3.5" />
+                        </button>
+                      )}
+                    </div>
 
                     <div className="flex items-center gap-2">
                       <button
@@ -937,6 +950,20 @@ export const PosView: React.FC = () => {
           onAddToCart={(customization) => addToCart(selectedItemForVariant, customization)}
         />
       )}
+
+      {/* Edit pilihan item yang sudah ada di keranjang */}
+      {editingCartItem && (() => {
+        const menu = menuItems.find((m) => m.id === editingCartItem.menuItemId);
+        if (!menu) return null;
+        return (
+          <VariantModal
+            item={menu}
+            initial={editingCartItem}
+            onClose={() => setEditingCartItem(null)}
+            onAddToCart={(custom) => updateCartItem(editingCartItem.id, menu, custom)}
+          />
+        );
+      })()}
 
       {/* Checkout Modal (Offline only, NO TABLE NUMBER) */}
       {isCheckoutOpen && (

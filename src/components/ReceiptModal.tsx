@@ -3,6 +3,7 @@ import { Printer, Check, X, Award, Globe, Store } from 'lucide-react';
 import { Transaction } from '../types';
 import { useApp } from '../context/AppContext';
 import { formatIDR, formatDateTime } from '../utils/formatters';
+import { describeCartItem } from '../utils/customization';
 
 interface ReceiptModalProps {
   transaction: Transaction;
@@ -10,7 +11,7 @@ interface ReceiptModalProps {
 }
 
 export const ReceiptModal: React.FC<ReceiptModalProps> = ({ transaction, onClose }) => {
-  const { storeSettings } = useApp();
+  const { storeSettings, customization } = useApp();
 
   const handlePrint = () => {
     window.print();
@@ -99,16 +100,9 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({ transaction, onClose
                     </span>
                     <span className="tabular-nums">{formatIDR(item.itemTotal)}</span>
                   </div>
-                  {(item.temperature || item.size || item.milkType || item.extraShot || item.notes) && (
+                  {(describeCartItem(item, customization).length > 0 || item.notes) && (
                     <div className="text-[10px] text-neutral-500 pl-3">
-                      {[
-                        item.temperature,
-                        item.size !== 'Regular' ? item.size : null,
-                        item.sugarLevel !== 'Normal' ? item.sugarLevel : null,
-                        item.milkType !== 'Fresh Milk' ? item.milkType : null,
-                        item.extraShot ? 'Extra Shot' : null,
-                        item.notes ? `"${item.notes}"` : null,
-                      ]
+                      {[...describeCartItem(item, customization), item.notes ? `"${item.notes}"` : null]
                         .filter(Boolean)
                         .join(' · ')}
                     </div>
