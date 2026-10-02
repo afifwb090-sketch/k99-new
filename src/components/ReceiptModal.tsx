@@ -175,11 +175,6 @@ export const ReceiptModal: React.FC<ReceiptModalProps> = ({ transaction, onClose
               </div>
             )}
 
-            {/* ERP Stock deduction acknowledgement */}
-            <div className="py-2 text-[9px] text-neutral-500 border-b border-dashed border-neutral-300 text-center">
-              ✓ Stok bahan baku ({transaction.deductedMaterials?.length || 0} item) otomatis terpotong sistem ERP
-            </div>
-
             {/* Footer notes */}
             <div className="text-center pt-3 space-y-1 text-[10px] text-neutral-600">
               <p className="font-medium text-neutral-800">{storeSettings.receiptFooter}</p>

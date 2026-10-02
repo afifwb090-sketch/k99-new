@@ -30,6 +30,7 @@ import {
   emptyShift,
 } from '../data/initialData';
 import { generateId } from '../utils/formatters';
+import { DEMO_IDS, DEMO_SHIFT_ID, withoutDemo } from '../data/demoIds';
 import { googleSheetsService } from '../services/googleSheetsService';
 import { buildDefaultCustomization, normalizeCustomization, computeLine, withDefaults, type CustomSelection } from '../utils/customization';
 import { pullState, pushState, loadSyncMeta, saveSyncMeta } from '../services/cloudSyncService';
@@ -189,12 +190,12 @@ const STORAGE_KEY = 'k99_coffee_pos_data_v2';
 export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => {
   const [rawMaterials, setRawMaterials] = useState<RawMaterial[]>(() => {
     const saved = localStorage.getItem(`${STORAGE_KEY}_materials`);
-    return saved ? JSON.parse(saved) : [];
+    return saved ? withoutDemo<RawMaterial>(JSON.parse(saved)) : [];
   });
 
   const [menuItems, setMenuItems] = useState<MenuItem[]>(() => {
     const saved = localStorage.getItem(`${STORAGE_KEY}_menu`);
-    return saved ? JSON.parse(saved) : [];
+    return saved ? withoutDemo<MenuItem>(JSON.parse(saved)) : [];
   });
 
   const [cart, setCart] = useState<CartItem[]>(() => {
@@ -204,22 +205,23 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [transactions, setTransactions] = useState<Transaction[]>(() => {
     const saved = localStorage.getItem(`${STORAGE_KEY}_transactions`);
-    return saved ? JSON.parse(saved) : [];
+    return saved ? withoutDemo<Transaction>(JSON.parse(saved)) : [];
   });
 
   const [stockMovements, setStockMovements] = useState<StockMovement[]>(() => {
     const saved = localStorage.getItem(`${STORAGE_KEY}_stock_movements`);
-    return saved ? JSON.parse(saved) : [];
+    return saved ? withoutDemo<StockMovement>(JSON.parse(saved)) : [];
   });
 
   const [expenses, setExpenses] = useState<Expense[]>(() => {
     const saved = localStorage.getItem(`${STORAGE_KEY}_expenses`);
-    return saved ? JSON.parse(saved) : [];
+    return saved ? withoutDemo<Expense>(JSON.parse(saved)) : [];
   });
 
   const [currentShift, setCurrentShift] = useState<Shift>(() => {
     const saved = localStorage.getItem(`${STORAGE_KEY}_shift`);
-    return saved ? JSON.parse(saved) : emptyShift;
+    const parsed = saved ? (JSON.parse(saved) as Shift) : null;
+    return parsed && parsed.id !== DEMO_SHIFT_ID ? parsed : emptyShift;
   });
 
   const [storeSettings, setStoreSettings] = useState<StoreSettings>(() => {
@@ -229,7 +231,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
 
   const [customers, setCustomers] = useState<Customer[]>(() => {
     const saved = localStorage.getItem(`${STORAGE_KEY}_customers`);
-    return saved ? JSON.parse(saved) : [];
+    return saved ? withoutDemo<Customer>(JSON.parse(saved)) : [];
   });
 
   const [debts, setDebts] = useState<DebtRecord[]>(() => {
@@ -245,7 +247,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
   const [tombstones, setTombstones] = useState<string[]>(() => {
     try {
       const saved = localStorage.getItem(`${STORAGE_KEY}_tombstones`);
-      return saved ? JSON.parse(saved) : [];
+      const list: string[] = saved ? JSON.parse(saved) : [];
+      return Array.from(new Set([...list, ...DEMO_IDS]));
     } catch {
       return [];
     }
@@ -1109,8 +1112,8 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
     setStockMovements(st.stockMovements as StockMovement[]);
     setDebts((st.debts || []) as DebtRecord[]);
     if (st.storeSettings) setStoreSettings(st.storeSettings as StoreSettings);
-    if (st.currentShift) setCurrentShift(st.currentShift as Shift);
-    setTombstones(st.tombstones);
+    if (st.currentShift && (st.currentShift as Shift).id !== DEMO_SHIFT_ID) setCurrentShift(st.currentShift as Shift);
+    setTombstones(Array.from(new Set([...st.tombstones, ...DEMO_IDS])));
   };
 
   const applyRemoteRef = useRef(applyRemote);
@@ -1146,6 +1149,7 @@ export const AppProvider: React.FC<{ children: ReactNode }> = ({ children }) => 
         push: pushState,
         apply: applyRemoteRef.current,
         commit: commitSyncRef.current,
+        demoIds: DEMO_IDS,
       });
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);

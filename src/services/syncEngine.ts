@@ -1,5 +1,5 @@
 import type { PullResult, PushResult, SyncMeta } from './cloudSyncService';
-import { type SyncState, emptySyncState, isStateEmpty, mergeStates, stateHash } from './syncMerge';
+import { type SyncState, emptySyncState, hasDemo, isStateEmpty, mergeStates, stateHash, stripDemo } from './syncMerge';
 
 /**
  * Satu siklus sinkronisasi (tarik -> gabung bila perlu -> kirim).
@@ -15,6 +15,8 @@ export interface SyncDeps {
   apply: (state: SyncState) => void;
   /** Catat bahwa `state` sudah selaras dengan server versi `version` */
   commit: (version: number, state: SyncState) => void;
+  /** ID data contoh (dummy) yang harus selalu dibuang, dari perangkat ini maupun dari server */
+  demoIds?: ReadonlySet<string>;
 }
 
 /** State yang benar-benar terbentuk setelah apply (pengaturan/shift lokal dipertahankan bila server kosong) */
@@ -32,20 +34,27 @@ export async function runSyncCycle(deps: SyncDeps, maxAttempts = 3): Promise<voi
     const pulled = await deps.pull(meta.version);
     if (!pulled.ok) throw new Error(pulled.message);
 
-    const local = deps.getLocal();
+    const localRaw = deps.getLocal();
+    const remoteRaw = pulled.state ?? emptySyncState();
+    // Data contoh (dummy) tidak boleh hidup lagi, dari mana pun asalnya
+    const demo = deps.demoIds;
+    const needsClean = !!demo && (hasDemo(localRaw, demo) || hasDemo(remoteRaw, demo));
+    const local = demo ? stripDemo(localRaw, demo) : localRaw;
+    const remote = demo ? stripDemo(remoteRaw, demo) : remoteRaw;
+
     const neverSynced = meta.version === 0;
-    const dirty = neverSynced ? !isStateEmpty(local) : stateHash(local) !== meta.hash;
+    const dirty = needsClean || (neverSynced ? !isStateEmpty(local) : stateHash(localRaw) !== meta.hash);
     const serverChanged = pulled.version !== meta.version;
-    const remote = pulled.state ?? emptySyncState();
 
     if (!serverChanged) {
       if (!dirty) {
         deps.commit(meta.version, local);
         return;
       }
+      if (needsClean) deps.apply(local);
       const pushed = await deps.push(meta.version, local);
       if (pushed.ok) {
-        deps.commit(pushed.version, local);
+        deps.commit(pushed.version, effectiveOf(local, localRaw));
         return;
       }
       if ('conflict' in pushed && pushed.conflict) continue;

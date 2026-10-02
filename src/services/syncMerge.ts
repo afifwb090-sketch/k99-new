@@ -108,6 +108,22 @@ export function mergeStates(preferred: SyncState, other: SyncState): SyncState {
   return out;
 }
 
+/** Apakah state memuat data contoh (dummy)? */
+export function hasDemo(s: SyncState, demoIds: ReadonlySet<string>): boolean {
+  return LIST_KEYS.some((k) => (s[k] as Array<{ id: string }>).some((x) => x && demoIds.has(x.id)));
+}
+
+/** Buang semua data contoh (dummy) dari state. Tidak mengubah state asli. */
+export function stripDemo(s: SyncState, demoIds: ReadonlySet<string>): SyncState {
+  const out: SyncState = { ...s };
+  for (const k of LIST_KEYS) {
+    (out as unknown as Record<string, unknown>)[k] = (s[k] as Array<{ id: string }>).filter(
+      (x) => x && !demoIds.has(x.id)
+    );
+  }
+  return out;
+}
+
 /** Hash ringkas (cyrb53) supaya sidik jari state bisa disimpan kecil di localStorage. */
 export function stateHash(s: SyncState): string {
   const str = JSON.stringify(s);
